@@ -1,0 +1,8 @@
+/.dummy
+/.pio
+/.vscode
+/logs
+/managed_components
+/sdkconfig.*
+/CMakeLists.txt
+/dependencies.lock
