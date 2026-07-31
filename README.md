@@ -44,7 +44,6 @@ Also checked directly after startup: same picture, so not due to the application
 
 Visual Studio Code (VSC), with next Extensions:
 
-- pioarduino
 - C/C++ and CMake extensions:
   - C/C++
   - C/C++ DevTools
@@ -52,8 +51,15 @@ Visual Studio Code (VSC), with next Extensions:
   - C/C++ Themes
   - CMake
   - CMake Tools
-  - ESP Crash Decoder
+- ESP Crash Decoder
+- GitHub Repositories
 - markdownlint (eg for this file)
+- pioarduino IDE
+- Prettier - Code formatter
+- Prettier-Standard - JavaScript formatter
+- Python
+- Python Debugger
+- Python Environments
 
 ## Compiler warnings
 
