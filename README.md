@@ -18,7 +18,7 @@ What's in:
 - **WiFi Manager**:
   - Connect to your local WiFi using a captive portal to set SSID and password
   - Also set **hostname** on that captive portal, and save it as Preference in NVS
-  - Optional push button (fixed GPIO), to clear the SSID, password and hostname
+  - Optional push button, to clear the SSID, password and hostname
 - **HTTP Server** with in-memory "Hello world" page
 - **OLED display** will scroll automatically the lines you write to it
 - **DotMatrix display** consisting of 8x8 units, console command to write a static text

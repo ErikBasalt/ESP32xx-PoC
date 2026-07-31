@@ -4,7 +4,9 @@
 class Hal {
   private:
     // GPIO pins
-    gpio_num_t statusLed_gpio = GPIO_NUM_NC; // status LED output
+    gpio_num_t button_gpio = GPIO_NUM_NC; // external button input, active Low
+
+    gpio_num_t statusLed_gpio = GPIO_NUM_NC; // status LED output; external when enough GPIO, otherwise onboard LED
     bool statusLed_activeLevel = HIGH;       // output level to activate (switch On) the status LED, depends on ESPxx board
 
     gpio_num_t neopixel_enable_gpio = GPIO_NUM_NC; // NeoPixel enable output
@@ -23,6 +25,11 @@ class Hal {
     bool setGpioPins(void); // in cpp file
 
     int initGpio(void) {
+        // Input button: active Low, so needs pullup
+        if (button_gpio != GPIO_NUM_NC) {
+            pinMode(button_gpio, INPUT_PULLUP);
+        }
+
         // Status LED
         if (statusLed_gpio != GPIO_NUM_NC) {
             pinMode(statusLed_gpio, OUTPUT);
@@ -52,7 +59,6 @@ class Hal {
         }
         if (analogInput_gpio != GPIO_NUM_NC) {
             // No need to set pinMode() for analog input, because analogRead() will do that automatically
-            //@@@@@@@@analogReadResolution(ADC_BITS); // ensure same 12 bits resolution on all ESP32 variants
         }
         return 0;
     }
@@ -62,6 +68,15 @@ class Hal {
     void begin(void) {
         if (setGpioPins()) {
             initGpio();
+        }
+    }
+
+    // Button input function, returns true if button is pressed
+    bool isButtonPressed(void) {
+        if (button_gpio != GPIO_NUM_NC) {
+            return (digitalRead(button_gpio) == LOW); // active LOW
+        } else {
+            return (false); // not configured, always false
         }
     }
 

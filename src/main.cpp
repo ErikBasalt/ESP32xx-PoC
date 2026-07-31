@@ -5,7 +5,9 @@
 #include "mynetwork.h"
 #include "console.h"
 #include "httpserver.h"
+#if (0 == 1)
 #include "neopixel_rmt.h"
+#endif
 #include "system.h" // for loop() statistics
 #include "dotmatrix.h"
 
@@ -34,8 +36,10 @@ void setup() {
 
     LOGI("Setup complete");
     LOG_PRINTF("Starting console (`?` for menu)\n");
+#if (0 == 1)
     setAllNeoPixels(0, 0, 0); // clear boot test color
-    hal.setStatusLed(false);  // LED=Off: setup() is complete
+#endif
+    hal.setStatusLed(false); // LED=Off: setup() is complete
 }
 
 void loop() {

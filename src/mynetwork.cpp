@@ -6,11 +6,9 @@
 #include <Preferences.h> // for hostname in NVS
 
 #include "logger.h"
+#include "hal.h"
 
 #define TAG "NETW"
-
-// static const gpio_num_t WiFi_reset_button_pin = GPIO_NUM_5; // Push button to GND, set to GPIO_NUM_NC if not used
-static const gpio_num_t WiFi_reset_button_pin = GPIO_NUM_NC; // Push button to GND, set to GPIO_NUM_NC if not used
 
 static const char *captivePortalSSID = "ConfigESP32"; // SSID of Access Point, when running captive portal to set the config
 
@@ -153,20 +151,13 @@ void startWifi(void) {
     //-----------------------------------------------------------
     // Reset WiFi button handling
     //-----------------------------------------------------------
-    if (WiFi_reset_button_pin != GPIO_NUM_NC) {
-        LOGI("WiFi reset button pin=%d", WiFi_reset_button_pin);
-        pinMode(WiFi_reset_button_pin, INPUT_PULLUP);
-        delay(100); // GPIO needs a little time to settle
-
-        if (digitalRead(WiFi_reset_button_pin) == LOW) {
-            LOGW("WARNING: WiFi Reset button pressed, resetting settings...");
-            wm.resetSettings(); // results in starting the captive portal later on
+    delay(100); // wait a little, to prevent false button press detection during bootup (pullup resistor needs to charge the input capacitor)
+    if (hal.isButtonPressed()) {
+        LOGW("WARNING: WiFi Reset button pressed, resetting settings...");
+        wm.resetSettings(); // results in starting the captive portal later on
 #ifdef CHANGE_HOSTNAME_ON_PORTAL
-            deleteHostnameFromNvs();
+        deleteHostnameFromNvs();
 #endif
-        }
-    } else {
-        LOGI("(no WiFi reset button)");
     }
 
     //-----------------------------------------------------------

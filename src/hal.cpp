@@ -26,6 +26,7 @@ bool Hal::setGpioPins(void) {
         // PCB antenna
         // Has 4 pin rows, only the 2 inner rows are used
         //-----------------------------------------------------------
+        button_gpio = (gpio_num_t)17;
         statusLed_gpio = (gpio_num_t)16; // onboard (blue) LED is GPIO_2 and can be used, however: use GPIO_16 for external (yellow) LED on big PCB, to be consistent with ESP32-S3 board
         neopixel_enable_gpio = (gpio_num_t)26;
         neopixel_data_gpio = (gpio_num_t)19;
@@ -39,6 +40,7 @@ bool Hal::setGpioPins(void) {
         //-----------------------------------------------------------
         // @@@TODO: Wemos ESP32-S2 D1 Mini breakout board
         //-----------------------------------------------------------
+        button_gpio = (gpio_num_t)-1;
         statusLed_gpio = (gpio_num_t)15;
         neopixel_enable_gpio = (gpio_num_t)-1;
         neopixel_data_gpio = (gpio_num_t)-1;
@@ -56,6 +58,7 @@ bool Hal::setGpioPins(void) {
         // PCB antenna
         // Has 4 pin rows, only the 2 inner rows are used
         //-----------------------------------------------------------
+        button_gpio = (gpio_num_t)3;
         statusLed_gpio = (gpio_num_t)12; // onboard (green) LED is GPIO_17 but in use for NeoPixel Data, so use GPIO_12 for external (yellow) LED on big PCB
         neopixel_enable_gpio = (gpio_num_t)16;
         neopixel_data_gpio = (gpio_num_t)17;
@@ -72,6 +75,7 @@ bool Hal::setGpioPins(void) {
         // Big ceramic antenna
         // U.FL connector for external antenna (requires soldering)
         //-----------------------------------------------------------
+        button_gpio = (gpio_num_t)2;
         statusLed_gpio = (gpio_num_t)8; // onboard (blue) LED
         statusLed_activeLevel = LOW;    // this board used an active LOW output to switch On the (blue)status LED
         neopixel_enable_gpio = (gpio_num_t)10;
@@ -90,6 +94,7 @@ bool Hal::setGpioPins(void) {
         // Ceramic antenna
         // U.FL connector for external antenna (software selectable)
         //-----------------------------------------------------------
+        button_gpio = (gpio_num_t)1;
         statusLed_gpio = (gpio_num_t)15;
         neopixel_enable_gpio = (gpio_num_t)21;
         neopixel_data_gpio = (gpio_num_t)2;
