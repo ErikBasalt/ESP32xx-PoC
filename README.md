@@ -37,8 +37,9 @@ Below the measured values with Console commands directly after reboot, with bare
 
 > It's unclear why the "Largest free block" of ESP32 and ESP32-C3 is relatively small.  
 Also checked directly after startup: same picture, so not due to the application.
-
-> I do have an ESP32-S2 (Wemos S2 Mini), but I cannot get the console logging to work. Have seen this before, also at others. Giving up for now.
+>
+> I do have an ESP32-S2 (Wemos S2 Mini), but I cannot get the console logging to work.  
+Have seen this before, also at others. Giving up for now.
 
 ## Build environment
 
