@@ -14,8 +14,8 @@
 static const char *TAG = "MAIN";
 
 void setup() {
-    hal.begin();            // initialize the GPIO pins, based on the used ESP32xx model
-    hal.setStatusLed(true); // LED=On: setup() is running
+    hal.begin(/*isRoundDisplay=*/true); // initialize the GPIO pins, based on the used ESP32xx model
+    hal.setStatusLed(true);             // LED=On: setup() is running
 
 #if (0 == 1)
     initNeoPixelRmt();
