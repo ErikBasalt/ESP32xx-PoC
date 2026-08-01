@@ -43,7 +43,7 @@ Have seen this before, also at others. Giving up for now.
 
 ## Build environment
 
-Visual Studio Code (VSC), with next Extensions:
+Visual Studio Code (VSC), latest version (currently 1.131.0), with next Extensions:
 
 - C/C++ and CMake extensions:
   - C/C++
@@ -61,6 +61,8 @@ Visual Studio Code (VSC), with next Extensions:
 - Python
 - Python Debugger
 - Python Environments
+
+Git for Windows, latest x64 version (currently 2.55.0) from [Git](https://www.git-scm.com)
 
 ## Compiler warnings
 
