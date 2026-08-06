@@ -62,6 +62,9 @@ Visual Studio Code (VSC), latest version (currently 1.131.0), with next Extensio
 - Python Debugger
 - Python Environments
 
+GitLens -  Git supercharged, free ("Community") edition.  
+In Settings I switched Off `[_]` the "Plus Features enabled" to avoid getting nagged about upgrading to Pro.  
+
 Git for Windows, latest x64 version (currently 2.55.0) from [Git](https://www.git-scm.com)
 
 ## Compiler warnings
