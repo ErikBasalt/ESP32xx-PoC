@@ -50,11 +50,13 @@ class Hal {
                 pinMode(neopixel_enable_gpio, OUTPUT);
                 setNeoPixelEnable(false); // default to disabled
             }
+#if (0 == 1)
+            //@@@TODO: keep signal generator, or move to Neopixel only?
             if (neopixel_data_gpio != GPIO_NUM_NC) {
                 pinMode(neopixel_data_gpio, OUTPUT);
                 digitalWrite(neopixel_data_gpio, LOW); // default to LOW
             }
-
+#endif
             // SPI
             if (spi_SCK_gpio != GPIO_NUM_NC) {
                 pinMode(spi_SCK_gpio, OUTPUT);
@@ -184,6 +186,10 @@ class Hal {
     gpio_num_t get_spi_SCK_pin() { return spi_SCK_gpio; }
 
     gpio_num_t get_spi_MOSI_pin() { return spi_MOSI_gpio; }
+
+    // Getter for Neopixel data pin number, to allow init outside this HAL
+    // (enable can be done by the HAL itself)
+    gpio_num_t get_neopixel_data_pin() { return neopixel_data_gpio; }
 };
 
 extern Hal hal; // global instance of HAL, to be used in other modules

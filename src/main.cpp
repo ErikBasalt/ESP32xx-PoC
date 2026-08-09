@@ -5,22 +5,15 @@
 #include "mynetwork.h"
 #include "console.h"
 #include "httpserver.h"
-#if (0 == 1)
-#include "neopixel_rmt.h"
-#endif
 #include "system.h" // for loop() statistics
 #include "dotmatrix.h"
+#include "neopixel_ring.h"
 
 static const char *TAG = "MAIN";
 
 void setup() {
-    hal.begin(/*isRoundDisplay=*/true); // initialize the GPIO pins, based on the used ESP32xx model
-    hal.setStatusLed(true);             // LED=On: setup() is running
-
-#if (0 == 1)
-    initNeoPixelRmt();
-    setAllNeoPixels(0, 0, 16); // dim blue while setup is running
-#endif
+    hal.begin(/*isRoundDisplay=*/false); // initialize the GPIO pins, based on the used ESP32xx model
+    hal.setStatusLed(true);              // LED=On: setup() is running
 
     startLogger(ESP_LOG_INFO); // default log level for all modules in src
 
@@ -32,13 +25,12 @@ void setup() {
     startOledLog(); // initialize the OLED display, if present
     startWifi();
     startHttpServer();
-    enableLoopWDT(); // enable the Watchdog for this task
+    startNeopixelRing(); // initialize the Neopixel ring, if present
+    enableLoopWDT();     // enable the Watchdog for this task
 
     LOGI("Setup complete");
     LOG_PRINTF("Starting console (`?` for menu)\n");
-#if (0 == 1)
-    setAllNeoPixels(0, 0, 0); // clear boot test color
-#endif
+
     hal.setStatusLed(false); // LED=Off: setup() is complete
 }
 
@@ -64,7 +56,7 @@ void loop() {
     //--------------------------------------------------
     // Console
     //--------------------------------------------------
-    consoleLoop();
+    consoleLoop(currentMillis);
 
     //--------------------------------------------------
     // Every new microprocessor second

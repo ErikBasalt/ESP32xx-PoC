@@ -8,6 +8,7 @@
 #include "mynetwork.h"
 #include "system.h"
 #include "dotmatrix.h"
+#include "neopixel_ring.h"
 
 #define TAG "CONS"
 
@@ -19,6 +20,8 @@ static const int IO_SPI_MOSI = 4;
 static const int IO_SPI_CS = 5;
 
 static int selectedIo = IO_STATUS_LED; // default selected I/O
+
+static bool isNeopixelAnimationActive = false; // default: Neopixel ring is NOT active
 
 void toggleSelectedIo(void) {
     switch (selectedIo) {
@@ -79,7 +82,7 @@ void selectNextIo(void) {
     }
 }
 
-void consoleLoop(void) {
+void consoleLoop(unsigned long currentMillis) {
     // Simple console, using single char commands
     if (Serial.available()) {
         char cmd = Serial.read();
@@ -102,6 +105,8 @@ void consoleLoop(void) {
             LOG_PRINTF("O = clear OLED\n");
             LOG_PRINTF("p = PXD normal output\n");
             LOG_PRINTF("P = PXD 1 MHz signal output\n");
+            LOG_PRINTF("q = toggle Neopixel ring animation\n");
+            LOG_PRINTF("Q = erase Neopixel ring\n");
             LOG_PRINTF("s = system info\n");
             LOG_PRINTF("x = show `Hello!` on dotMatrix\n");
             LOG_PRINTF("X = clear dotMatrix\n");
@@ -168,6 +173,12 @@ void consoleLoop(void) {
             LOG_PRINTF("PXD 1 MHz signal output\n");
             hal.setNeoPixelDataSignalGenerator(true);
             break;
+        case 'q':
+            isNeopixelAnimationActive = !isNeopixelAnimationActive;
+            break;
+        case 'Q':
+            eraseNeopixelRing();
+            break;
         case 'x':
             dotMatrixPtr->showMessage("Hello!");
             break;
@@ -197,5 +208,8 @@ void consoleLoop(void) {
             LOG_PRINTF("Unknown command=`%c`\n", cmd);
             break;
         }
+    }
+    if (isNeopixelAnimationActive) {
+        loopNeopixelRing(currentMillis);
     }
 }

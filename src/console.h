@@ -1,2 +1,2 @@
 #pragma once
-void consoleLoop(void);
+void consoleLoop(unsigned long currentMillis);

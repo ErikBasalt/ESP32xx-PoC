@@ -22,6 +22,7 @@ What's in:
 - **HTTP Server** with in-memory "Hello world" page
 - **OLED display** will scroll automatically the lines you write to it
 - **DotMatrix display** consisting of 8x8 units, console command to write a static text
+- **Neopixels** showing high speed rotating red dot, using I2S and DMA for minimal uP impact
 
 ## Tested ESP32xx devices
 
@@ -33,12 +34,13 @@ Below the measured values with Console commands directly after reboot, with bare
 | ESP32 (D1 mini)          | 226960    | 110580             | 38200     |
 | ESP32-C3 (Mini Pro)      | 195920    | 114676             | 61900     |
 | ESP32-C6 (Seeed)         | 314428    | 294900             | 56300     |
+| ESP32-S2 (Wemos S2 Mini) | -         | -                  | -         |
 | ESP32-S3 (Lilygo T7)     | 258796    | 217076             | 54400     |
 
 > It's unclear why the "Largest free block" of ESP32 and ESP32-C3 is relatively small.  
 Also checked directly after startup: same picture, so not due to the application.
 >
-> I do have an ESP32-S2 (Wemos S2 Mini), but I cannot get the console logging to work.  
+> I do have an ESP32-S2, but I cannot get the console logging to work.  
 Have seen this before, also at others. Giving up for now.
 
 ## Build environment
@@ -69,9 +71,4 @@ Git for Windows, latest x64 version (currently 2.55.0) from [Git](https://www.gi
 
 ## Compiler warnings
 
-When compiling the full application including the used standard libraries, quite some warnings are generated:
-
-- WiFi Manager: using %d to print uint32_t value
-- ESP32C3 and C6 hal: missing initializer
-
-These warnings should be solved by the libraries themselves.
+Enabled all warnings for my own (src) code, while using the default warnings for the used libraries. This prevents being overfloaded by warnings of these libs (like WiFiManager and MD_MAX72XX !), that I don't intend to fix anyway.
