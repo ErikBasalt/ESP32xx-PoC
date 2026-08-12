@@ -79,8 +79,8 @@ void allBlackNeopixelRing(void) { // for console command
 void loopNeopixelRing(unsigned long currentMillis) {
     static int coloredIndex = 0;
     static int blackIndex = PIXEL_COUNT - 1;
-    static int erikLoopStartMillis = 0;
-    static int erikMaxMillisPerLoop = 0;
+    static int loopStartMillis = 0;
+    static int maxMillisPerLoop = 0;
 
 #if (0 == 1)
     // Throttle the ring updates to allow time for the previous neopixel_SetPixel() to complete before sending new data
@@ -106,35 +106,35 @@ void loopNeopixelRing(unsigned long currentMillis) {
             coloredIndex = 0;
 
             // Ring loop speed
-            if (erikLoopStartMillis != 0) {
-                int erikLoopMillis = currentMillis - erikLoopStartMillis;
-                if (erikLoopMillis > erikMaxMillisPerLoop) {
-                    erikMaxMillisPerLoop = erikLoopMillis;
-                    ESP_LOGI(TAG, "Max millis per loop = %d", erikMaxMillisPerLoop);
+            if (loopStartMillis != 0) {
+                int loopMillis = currentMillis - loopStartMillis;
+                if (loopMillis > maxMillisPerLoop) {
+                    maxMillisPerLoop = loopMillis;
+                    ESP_LOGI(TAG, "Max millis per loop = %d", maxMillisPerLoop);
                 }
             }
-            erikLoopStartMillis = currentMillis;
+            loopStartMillis = currentMillis;
 
             // Used chunks
             tNpContext *c = (tNpContext *)npxContext;
-            static int reportedMaxErikChunksSent = 0;
-            if (c->erikMaxChunksSent > reportedMaxErikChunksSent) {
-                reportedMaxErikChunksSent = c->erikMaxChunksSent;
-                ESP_LOGI(TAG, "erikMaxChunksSent=%d", reportedMaxErikChunksSent);
+            static int reportedMaxChunksSent = 0;
+            if (c->stats.maxChunksSent > reportedMaxChunksSent) {
+                reportedMaxChunksSent = c->stats.maxChunksSent;
+                ESP_LOGI(TAG, "maxChunksSent=%d", reportedMaxChunksSent);
             }
 
             // Transmit overflows - Currently, on_send_q_ovf callback is not used in neopixel.cpp
-            static int reportedMaxErikOverflowCount = 0;
-            if (c->erikOverflowCount > reportedMaxErikOverflowCount) {
-                reportedMaxErikOverflowCount = c->erikOverflowCount;
-                ESP_LOGW(TAG, "erikOverflowCount=%d", reportedMaxErikOverflowCount);
+            static int reportedMaxOverflowCount = 0;
+            if (c->stats.overflowCount > reportedMaxOverflowCount) {
+                reportedMaxOverflowCount = c->stats.overflowCount;
+                ESP_LOGW(TAG, "overflowCount=%d", reportedMaxOverflowCount);
             }
 
             // Task overruns
-            static int reportedMaxErikTaskOverrunCount = 0;
-            if (c->erikTaskOverrunCount > reportedMaxErikTaskOverrunCount) {
-                reportedMaxErikTaskOverrunCount = c->erikTaskOverrunCount;
-                ESP_LOGW(TAG, "erikTaskOverrunCount=%d", reportedMaxErikTaskOverrunCount);
+            static int reportedMaxTaskOverrunCount = 0;
+            if (c->stats.taskOverrunCount > reportedMaxTaskOverrunCount) {
+                reportedMaxTaskOverrunCount = c->stats.taskOverrunCount;
+                ESP_LOGW(TAG, "taskOverrunCount=%d", reportedMaxTaskOverrunCount);
             }
         }
     } // else: busy, try again later

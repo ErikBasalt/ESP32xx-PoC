@@ -32,6 +32,13 @@ typedef union UnionPixelColor {
 
 typedef void (*pfnSetPixel)(void *c, uint32_t index, const PixelColor pixel);
 
+struct neoPixelStatistics {
+    uint32_t chunksSent;
+    uint32_t maxChunksSent;
+    uint32_t overflowCount;
+    uint32_t taskOverrunCount;
+};
+
 typedef struct sNpContext {
     portMUX_TYPE lock;
     SemaphoreHandle_t newData;  // new data is available to be sent to the Neopixels
@@ -40,11 +47,8 @@ typedef struct sNpContext {
     i2s_chan_handle_t i2s;
     uint32_t nrPixels;
     bool terminate;
-    uint32_t bytesSent;
-    uint32_t erikChunksSent;
-    uint32_t erikMaxChunksSent;
-    uint32_t erikOverflowCount;
-    uint32_t erikTaskOverrunCount;
+    uint32_t bytesSent;              // to keep track of DMA progress
+    struct neoPixelStatistics stats; // statistics for debugging and performance monitoring only
 
     uint8_t *buffer;
     uint32_t bufferSize;

@@ -29,7 +29,7 @@
 static void neopixel_task(void *arg);
 static bool i2s_tx_queue_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
 
-static bool erik_i2s_tx_queue_overflow_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
+static bool i2s_tx_queue_overflow_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
 
 static void setpixel_ws2812b(void *c, uint32_t index, const PixelColor color);
 static void setpixel_sk6812b(void *c, uint32_t index, const PixelColor color);
@@ -73,7 +73,7 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
         .on_recv = NULL,
         .on_recv_q_ovf = NULL,
         .on_sent = i2s_tx_queue_sent_callback,
-        .on_send_q_ovf = NULL, // erik_i2s_tx_queue_overflow_callback makes no sense, will increase anyway whether or not using enable/disable I2S channel
+        .on_send_q_ovf = NULL, // i2s_tx_queue_overflow_callback makes no sense, will increase anyway whether or not using enable/disable I2S channel
     };
 
     c = (tNpContext *)malloc(sizeof(*c));
@@ -109,10 +109,7 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
     c->isReady = xSemaphoreCreateBinary();
     c->terminate = false;
     c->bytesSent = 0;
-    c->erikChunksSent = 0;
-    c->erikMaxChunksSent = 0;
-    c->erikOverflowCount = 0;
-    c->erikTaskOverrunCount = 0;
+    c->stats = {}; // reset all statistics to zero
 
     c->buffer = (uint8_t *)malloc(c->bufferSize);
     memset(c->buffer, 0, c->bufferSize);                        /* initializes the reset bytes to zero */
@@ -207,7 +204,7 @@ void erik_ShowRing_noTask(tNeopixelContext ctx) { // Did NOT get it to work so f
     // Send buffer
     size_t bytesLoaded;
     c->bytesSent = 0;
-    c->erikChunksSent = 0;
+    c->stats.chunksSent = 0;
 
     i2s_channel_preload_data(c->i2s, erik_buffer, c->bufferSize, &bytesLoaded);
     i2s_channel_enable(c->i2s);
@@ -235,21 +232,21 @@ static IRAM_ATTR bool i2s_tx_queue_sent_callback(i2s_chan_handle_t handle, i2s_e
     // Finished sending one (1) DMA buffer
     tNpContext *c = (tNpContext *)user_ctx;
     c->bytesSent += event->size;
-    c->erikChunksSent++;
+    c->stats.chunksSent++;
     if (c->bytesSent >= c->bufferSize) {
         // Erik added
-        if (c->erikChunksSent > c->erikMaxChunksSent) {
-            c->erikMaxChunksSent = c->erikChunksSent;
+        if (c->stats.chunksSent > c->stats.maxChunksSent) {
+            c->stats.maxChunksSent = c->stats.chunksSent;
         }
         xSemaphoreGive(c->dataSent);
     }
     return false; // no need for RTOS to check immediately for higher priority task
 }
 
-static IRAM_ATTR bool erik_i2s_tx_queue_overflow_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx) {
+static IRAM_ATTR bool i2s_tx_queue_overflow_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx) {
     // @@@TODO: these overflows seem to be common?? for now, disabled this callback, but keep it here for future reference
     tNpContext *c = (tNpContext *)user_ctx;
-    c->erikOverflowCount++;
+    c->stats.overflowCount++;
     return false; // no need for RTOS to check immediately for higher priority task
 }
 
@@ -284,7 +281,7 @@ static void neopixel_task(void *arg) {
         taskEXIT_CRITICAL(&c->lock);
 
         c->bytesSent = 0;
-        c->erikChunksSent = 0;
+        c->stats.chunksSent = 0;
 #if (ERIK_ENABLE_I2S_CHANNEL_ONLY_ONCE == 1)
         // No preload possible, don't do enable/disable, just write the data to the I2S channel
         bytesLoaded = 0; // nothing preloaded
@@ -306,7 +303,7 @@ static void neopixel_task(void *arg) {
 #if (1 == 1)
         // Discard already waiting new request, if any, to prevent actual overruns
         if (xSemaphoreTake(c->newData, 0) == pdTRUE) {
-            c->erikTaskOverrunCount++;
+            c->stats.taskOverrunCount++;
         }
 #endif
     }
