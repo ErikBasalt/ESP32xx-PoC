@@ -4,7 +4,7 @@
 extern "C" {
 #endif
 
-void eraseNeopixelRing(void);
+void allBlackNeopixelRing(void);
 bool startNeopixelRing(void);
 void loopNeopixelRing(unsigned long currentMillis);
 

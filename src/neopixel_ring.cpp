@@ -9,35 +9,35 @@
 // Erik
 #include "hal.h"
 
-#define TAG "NPIX"
+#define TAG "RING"
 #define PIXEL_COUNT 84 // 2 rings in series, 60+24
 
 #define I2S_TIMEOUT_TICKS 1000
 
-static const ErikPixel black = {.bytes = {0, 0, 0, 0}};
-static const ErikPixel cyan = {.bytes = {0x28, 0x28, 0, 0}};
+static const PixelColor black = {.bytes = {0, 0, 0, 0}};
+static const PixelColor cyan = {.bytes = {0x28, 0x28, 0, 0}};
 
-static const ErikPixel blue = {.bytes = {0x28, 0, 0, 0}}; // BGR(W), .bytesBGRW = ...
-static const ErikPixel green = {.bytes = {0, 0x28, 0, 0}};
-static const ErikPixel red = {.bytes = {0, 0, 0x28, 0}};
+static const PixelColor blue = {.bytes = {0x28, 0, 0, 0}}; // BGR(W), .bytesBGRW = ...
+static const PixelColor green = {.bytes = {0, 0x28, 0, 0}};
+static const PixelColor red = {.bytes = {0, 0, 0x28, 0}};
 
-static const ErikPixel red32 = {.value = 0x280000}; // (W)RGB, .valueWRGB = ...
-static const ErikPixel green32 = {.value = 0x002800};
-static const ErikPixel blue32 = {.value = 0x000028};
-static const ErikPixel cyan32 = {.value = 0x002828};
-static const ErikPixel yellow32 = {.value = 0x282800};
+static const PixelColor red32 = {.value = 0x280000}; // (W)RGB, .valueWRGB = ...
+static const PixelColor green32 = {.value = 0x002800};
+static const PixelColor blue32 = {.value = 0x000028};
+static const PixelColor cyan32 = {.value = 0x002828};
+static const PixelColor yellow32 = {.value = 0x282800};
 
 static tNeopixelContext npxContext = nullptr;
 
 static unsigned int minIntervalMillis = 0; // minimum time [ms] between ring updates
 
-static void erik_EraseNeopixels(tNeopixelContext ctx) {
+static void allBlack(tNeopixelContext ctx) {
     tNpContext *c = (tNpContext *)ctx;
 
     for (int i = 0; i < PIXEL_COUNT; i++) {
-        erik_SetNeopixel(c, i, black);
+        neopixel_SetColor(c, i, black);
     }
-    erik_ShowNeopixels(c); // send the data to the Neopixel ring
+    neopixel_Show(c); // send the data to the Neopixel ring
 }
 
 bool startNeopixelRing(void) {
@@ -66,14 +66,14 @@ bool startNeopixelRing(void) {
     }
     ESP_LOGI(TAG, "Neopixel ring minimum update interval=%d ms", minIntervalMillis);
 
-    hal.setNeoPixelEnable(true);     // enable the data output
-    delay(10);                       // allow time for the 74HCT126 to enable the output
-    erik_EraseNeopixels(npxContext); // erase possible old pixels
+    hal.setNeoPixelEnable(true); // enable the data output
+    delay(10);                   // allow time for the 74HCT126 to enable the output
+    allBlack(npxContext);        // ring may have spurious colors on power-up, make them all black
     return (true);
 }
 
-void eraseNeopixelRing(void) {
-    erik_EraseNeopixels(npxContext);
+void allBlackNeopixelRing(void) { // for console command
+    allBlack(npxContext);
 }
 
 void loopNeopixelRing(unsigned long currentMillis) {
@@ -96,9 +96,9 @@ void loopNeopixelRing(unsigned long currentMillis) {
         return;
     }
 
-    erik_SetNeopixel(npxContext, blackIndex, black); // erase previously colored pixel
-    erik_SetNeopixel(npxContext, coloredIndex, red); // set new colored pixel
-    if (erik_ShowNeopixels(npxContext)) {            // send the data to the Neopixel ring
+    neopixel_SetColor(npxContext, blackIndex, black); // erase previously colored pixel
+    neopixel_SetColor(npxContext, coloredIndex, red); // set new colored pixel
+    if (neopixel_Show(npxContext)) {                  // send the data to the Neopixel ring
         // Update the pixel indexes for the next iteration
         blackIndex = coloredIndex;
         if (++coloredIndex >= PIXEL_COUNT) {

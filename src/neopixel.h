@@ -17,28 +17,28 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-// union ErikPixel can be used as one 32-bit value, or by addressing the four individual r, g, b, w bytes
-struct StructErikPixel {
+// union PixelColor can be used as one 32-bit value, or by addressing the four individual r, g, b, w bytes
+struct StructPixelColor {
     uint8_t b; // little-endian for whole ESP32xx family, do NOT change order of these bytes, otherwise the color will be wrong!
     uint8_t g;
     uint8_t r;
-    uint8_t w;
+    uint8_t w; // white, only used for SK6812B (RGBW) Neopixels, ignored for WS2812B (RGB) Neopixels
 };
 
-typedef union UnionErikPixel {
-    struct StructErikPixel bytes; // set as BGR(W), eg: ErikPixel softRed = {.bytes = {0, 0, 0x28, 0}};
-    uint32_t value;               // set as 0x(W)RGB, eg: ErikPixel  softRed = {.value = 0x280000};
-} ErikPixel;
+typedef union UnionPixelColor {
+    struct StructPixelColor bytes; // set as BGR(W), eg: PixelColor dimRed = {.bytes = {0, 0, 0x28, 0}};
+    uint32_t value;                // set as 0x(W)RGB, eg: PixelColor dimRed = {.value = 0x280000};
+} PixelColor;
 
-typedef void (*pfnSetPixel)(void *c, uint32_t index, const ErikPixel pixel);
+typedef void (*pfnSetPixel)(void *c, uint32_t index, const PixelColor pixel);
 
 typedef struct sNpContext {
     portMUX_TYPE lock;
-    SemaphoreHandle_t newData;
-    SemaphoreHandle_t dataSent;
-    SemaphoreHandle_t erik_isReady;
+    SemaphoreHandle_t newData;  // new data is available to be sent to the Neopixels
+    SemaphoreHandle_t dataSent; // all data has been sent to the Neopixels, but not fully ready for new data yet
+    SemaphoreHandle_t isReady;  // ready to send new data to the Neopixels
     i2s_chan_handle_t i2s;
-    uint32_t pixels;
+    uint32_t nrPixels;
     bool terminate;
     uint32_t bytesSent;
     uint32_t erikChunksSent;
@@ -60,19 +60,19 @@ typedef enum {
 } eNeopixelMode;
 
 /*! \brief Create a neopixel context
- * \param pixels Number of pixels
+ * \param nrPixels Number of pixels
  * \param dout_pin Physical pin to send neopixel data (e.g. GPIO_NUM_27)
  * \param mode Neopixel mode (one of NEOPIXEL_MODE_*)
  * \returns Pointer to neopixel context, used as the first parameter
  *          to subsequent neopixel function calls
  */
-tNeopixelContext neopixel_Initialize(uint32_t pixels, gpio_num_t dout_pin, eNeopixelMode mode);
+tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNeopixelMode mode);
 
 // Erik
-void erik_SetNeopixel(tNeopixelContext ctx, uint32_t index, const ErikPixel pixel);
+void neopixel_SetColor(tNeopixelContext ctx, uint32_t index, const PixelColor pixel);
 
-bool erik_ShowNeopixels(tNeopixelContext ctx);
-bool erik_ShowNeopixels_noWait(tNeopixelContext ctx);
+bool neopixel_Show(tNeopixelContext ctx);
+bool neopixel_ShowNoWait(tNeopixelContext ctx);
 void erik_ShowRing_noTask(tNeopixelContext ctx);
 
 /*! \brief Get minimum number of ticks between neopixel_SetPixel calls

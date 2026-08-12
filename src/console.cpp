@@ -177,7 +177,7 @@ void consoleLoop(unsigned long currentMillis) {
             isNeopixelAnimationActive = !isNeopixelAnimationActive;
             break;
         case 'Q':
-            eraseNeopixelRing();
+            allBlackNeopixelRing();
             break;
         case 'x':
             dotMatrixPtr->showMessage("Hello!");

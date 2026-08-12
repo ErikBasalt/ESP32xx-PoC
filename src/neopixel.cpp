@@ -18,7 +18,7 @@
 #include "ws2812b_protocol.h"
 #include "sk6812b_protocol.h"
 
-#define TAG "neopixel"
+#define TAG "NPIX"
 #define I2S_TIMEOUT_TICKS 1000
 #define NEOPIXEL_TASK_PRIORITY (configMAX_PRIORITIES - 1)
 
@@ -31,14 +31,14 @@ static bool i2s_tx_queue_sent_callback(i2s_chan_handle_t handle, i2s_event_data_
 
 static bool erik_i2s_tx_queue_overflow_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
 
-static void setpixel_ws2812b(void *c, uint32_t index, const ErikPixel pixel);
-static void setpixel_sk6812b(void *c, uint32_t index, const ErikPixel pixel);
+static void setpixel_ws2812b(void *c, uint32_t index, const PixelColor color);
+static void setpixel_sk6812b(void *c, uint32_t index, const PixelColor color);
 
 /* -------------------------------------------------------------------------------------------------------------
  * Exported Functions
  */
 
-tNeopixelContext neopixel_Initialize(uint32_t pixels, gpio_num_t dout_pin, eNeopixelMode mode) {
+tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNeopixelMode mode) {
     tNpContext *c = NULL;
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
 #if (0 == 1)
@@ -83,16 +83,16 @@ tNeopixelContext neopixel_Initialize(uint32_t pixels, gpio_num_t dout_pin, eNeop
     }
     memset(c, 0, sizeof(*c));
 
-    c->pixels = pixels;
+    c->nrPixels = nrPixels;
     switch (mode) {
     case NEOPIXEL_MODE_WS2812B:
         c->bitrate = WS2812B_BITRATE;
-        c->bufferSize = (c->pixels * WS2812B_BYTES_PER_PIXEL) + WS2812B_RESET_BYTES;
+        c->bufferSize = (c->nrPixels * WS2812B_BYTES_PER_PIXEL) + WS2812B_RESET_BYTES;
         c->setpixel = setpixel_ws2812b;
         break;
     case NEOPIXEL_MODE_SK6812B:
         c->bitrate = SK6812B_BITRATE;
-        c->bufferSize = (c->pixels * SK6812B_BYTES_PER_PIXEL) + SK6812B_RESET_BYTES;
+        c->bufferSize = (c->nrPixels * SK6812B_BYTES_PER_PIXEL) + SK6812B_RESET_BYTES;
         c->setpixel = setpixel_sk6812b;
         break;
     default:
@@ -100,13 +100,13 @@ tNeopixelContext neopixel_Initialize(uint32_t pixels, gpio_num_t dout_pin, eNeop
         free(c);
         return NULL;
     }
-    ESP_LOGI(TAG, "Pixels=%d, bit buffer size=%d bytes, bitrate=%d bps", c->pixels, c->bufferSize, c->bitrate);
+    ESP_LOGI(TAG, "nrPixels=%d, bit buffer size=%d bytes, bitrate=%d bps", c->nrPixels, c->bufferSize, c->bitrate);
 
     std_cfg.clk_cfg.sample_rate_hz = c->bitrate / 16 / 2;
     portMUX_INITIALIZE(&c->lock);
     c->newData = xSemaphoreCreateBinary();
     c->dataSent = xSemaphoreCreateBinary();
-    c->erik_isReady = xSemaphoreCreateBinary();
+    c->isReady = xSemaphoreCreateBinary();
     c->terminate = false;
     c->bytesSent = 0;
     c->erikChunksSent = 0;
@@ -152,17 +152,17 @@ void neopixel_Deinit(tNeopixelContext ctx) {
     free(c);
 }
 
-void erik_SetNeopixel(tNeopixelContext ctx, uint32_t index, const ErikPixel pixel) { //@@@TODO pass pixel by value i/o pointer?
+void neopixel_SetColor(tNeopixelContext ctx, uint32_t index, const PixelColor color) {
     tNpContext *c = (tNpContext *)ctx;
 
-    if (index < c->pixels) {
-        c->setpixel(c, index, pixel);
+    if (index < c->nrPixels) {
+        c->setpixel(c, index, color);
     }
 }
 
-bool erik_ShowNeopixels_noWait(tNeopixelContext ctx) {
+bool neopixel_ShowNoWait(tNeopixelContext ctx) {
     tNpContext *c = (tNpContext *)ctx;
-    if (xSemaphoreTake(c->erik_isReady, 0) != pdTRUE) {
+    if (xSemaphoreTake(c->isReady, 0) != pdTRUE) {
         // Still busy sending previous data to the Neopixel ring, so skip this iteration (Neopixels will NOT be updated)
         return (false);
     }
@@ -170,13 +170,13 @@ bool erik_ShowNeopixels_noWait(tNeopixelContext ctx) {
     return (true);
 }
 
-bool erik_ShowNeopixels(tNeopixelContext ctx) {
+bool neopixel_Show(tNeopixelContext ctx) {
     tNpContext *c = (tNpContext *)ctx;
     unsigned long startMicros = esp_timer_get_time();
     unsigned long waitMicros = 0;
     static unsigned long maxWaitMicros = 0;
 
-    xSemaphoreTake(c->erik_isReady, portMAX_DELAY); // wait until previous data has been sent to the Neopixel ring
+    xSemaphoreTake(c->isReady, portMAX_DELAY); // wait until previous data has been sent to the Neopixel ring
 
     waitMicros = esp_timer_get_time() - startMicros;
     if (waitMicros > maxWaitMicros) {
@@ -184,7 +184,7 @@ bool erik_ShowNeopixels(tNeopixelContext ctx) {
         ESP_LOGI(TAG, "maxWaitMicros=%lu", maxWaitMicros);
     }
     xSemaphoreGive(c->newData); // signal Task to send the data to the Neopixel ring
-    return (true);              // always true, but keep return value to be comptatible with erik_ShowNeopixels_noWait()
+    return (true);              // always true, but keep return value to be comptatible with neopixel_ShowNoWait()
 }
 
 void erik_ShowRing_noTask(tNeopixelContext ctx) { // Did NOT get it to work so far...
@@ -243,14 +243,14 @@ static IRAM_ATTR bool i2s_tx_queue_sent_callback(i2s_chan_handle_t handle, i2s_e
         }
         xSemaphoreGive(c->dataSent);
     }
-    return false; //@@@TODO: what does this return value mean? false = no yield, true = yield?
+    return false; // no need for RTOS to check immediately for higher priority task
 }
 
 static IRAM_ATTR bool erik_i2s_tx_queue_overflow_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx) {
     // @@@TODO: these overflows seem to be common?? for now, disabled this callback, but keep it here for future reference
     tNpContext *c = (tNpContext *)user_ctx;
     c->erikOverflowCount++;
-    return false;
+    return false; // no need for RTOS to check immediately for higher priority task
 }
 
 static void neopixel_task(void *arg) {
@@ -266,7 +266,7 @@ static void neopixel_task(void *arg) {
 
     ESP_LOGD(TAG, "[%s] Started", __func__);
 
-    xSemaphoreGive(c->erik_isReady); // ready for first request
+    xSemaphoreGive(c->isReady); // ready for first request
 
     while (!c->terminate) {
         /* block task, waiting for an update */
@@ -302,7 +302,7 @@ static void neopixel_task(void *arg) {
 #else
         i2s_channel_disable(c->i2s);
 #endif
-        xSemaphoreGive(c->erik_isReady); // signal ready for new request
+        xSemaphoreGive(c->isReady); // signal ready for new request
 #if (1 == 1)
         // Discard already waiting new request, if any, to prevent actual overruns
         if (xSemaphoreTake(c->newData, 0) == pdTRUE) {
@@ -317,34 +317,34 @@ static void neopixel_task(void *arg) {
     vTaskDelete(NULL); /* Destroy context */
 }
 
-static void setpixel_ws2812b(void *ctx, uint32_t index, const ErikPixel pixel) {
+static void setpixel_ws2812b(void *ctx, uint32_t index, const PixelColor color) {
     tNpContext *c = (tNpContext *)ctx;
     uint8_t *buffer = c->buffer;
     uint32_t offset = index * WS2812B_BYTES_PER_PIXEL;
 
-    const uint8_t *sequence = ws2812b_color_map[pixel.bytes.g];
+    const uint8_t *sequence = ws2812b_color_map[color.bytes.g];
     for (int i = 0; i < WS2812B_BYTES_PER_PIXEL; ++i, ++offset) {
         if (i == 3)
-            sequence = ws2812b_color_map[pixel.bytes.r];
+            sequence = ws2812b_color_map[color.bytes.r];
         if (i == 6)
-            sequence = ws2812b_color_map[pixel.bytes.b];
+            sequence = ws2812b_color_map[color.bytes.b];
         buffer[offset ^ 1] = sequence[i % WS2812B_BYTES_PER_COLOR]; // fill buffer in 16-bit little-endian format
     }
 }
 
-static void setpixel_sk6812b(void *ctx, uint32_t index, const ErikPixel pixel) {
+static void setpixel_sk6812b(void *ctx, uint32_t index, const PixelColor color) {
     tNpContext *c = (tNpContext *)ctx;
     uint8_t *buffer = c->buffer;
     uint32_t offset = index * SK6812B_BYTES_PER_PIXEL;
 
-    const uint8_t *sequence = sk6812b_color_map[pixel.bytes.g];
+    const uint8_t *sequence = sk6812b_color_map[color.bytes.g];
     for (int i = 0; i < SK6812B_BYTES_PER_PIXEL; ++i, ++offset) {
         if (i == 3)
-            sequence = sk6812b_color_map[pixel.bytes.r];
+            sequence = sk6812b_color_map[color.bytes.r];
         if (i == 6)
-            sequence = sk6812b_color_map[pixel.bytes.b];
+            sequence = sk6812b_color_map[color.bytes.b];
         if (i == 9)
-            sequence = sk6812b_color_map[pixel.bytes.w];
+            sequence = sk6812b_color_map[color.bytes.w];
         buffer[offset ^ 1] = sequence[i % SK6812B_BYTES_PER_COLOR]; // fill buffer in 16-bit little-endian format
     }
 }
