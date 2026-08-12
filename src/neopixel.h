@@ -1,52 +1,79 @@
+#pragma once
 /* \copyright 2023-2026 Zorxx Software. All rights reserved.
  * \license This file is released under the MIT License. See the LICENSE file for details.
  * \brief ESP32 Neopixel Driver
  */
-#ifndef _ESP32_NEOPIXEL_H
-#define _ESP32_NEOPIXEL_H
+
+#include <freertos/FreeRTOS.h> //@@@TODO: do we need all these here, or can move partly to .cpp ?
+#include <freertos/semphr.h>
+#include <driver/i2s_std.h>
+#include <driver/i2s_common.h>
 
 #include <stdint.h>
 #include <stdbool.h>
 
+#include <stdlib.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+// union ErikPixel can be used as one 32-bit value, or by addressing the four individual r, g, b, w bytes
+struct StructErikPixel {
+    uint8_t b; // little-endian for whole ESP32xx family, do NOT change order of these bytes, otherwise the color will be wrong!
+    uint8_t g;
+    uint8_t r;
+    uint8_t w;
+};
+
+typedef union UnionErikPixel {
+    struct StructErikPixel bytes; // set as BGR(W), eg: ErikPixel softRed = {.bytes = {0, 0, 0x28, 0}};
+    uint32_t value;               // set as 0x(W)RGB, eg: ErikPixel  softRed = {.value = 0x280000};
+} ErikPixel;
+
+typedef void (*pfnSetPixel)(void *c, uint32_t index, const ErikPixel pixel);
+
+typedef struct sNpContext {
+    portMUX_TYPE lock;
+    SemaphoreHandle_t newData;
+    SemaphoreHandle_t dataSent;
+    SemaphoreHandle_t erik_isReady;
+    i2s_chan_handle_t i2s;
+    uint32_t pixels;
+    bool terminate;
+    uint32_t bytesSent;
+    uint32_t erikChunksSent;
+    uint32_t erikMaxChunksSent;
+    uint32_t erikOverflowCount;
+    uint32_t erikTaskOverrunCount;
+
+    uint8_t *buffer;
+    uint32_t bufferSize;
+    pfnSetPixel setpixel;
+    uint32_t bitrate;
+} tNpContext;
 
 typedef void *tNeopixelContext;
 
-#define NP_RGB2RED(rgb)    (((rgb) & 0x00FF0000UL) >> 16)
-#define NP_RGB2GREEN(rgb)  (((rgb) & 0x0000FF00UL) >> 8)
-#define NP_RGB2BLUE(rgb)   ((rgb)  & 0x000000FFUL)
-#define NP_RGB(r, g, b)   ( ((uint32_t)(r) & 0xFF) << 16 \
-                          | ((uint32_t)(g) & 0xFF) << 8  \
-                          | ((uint32_t)(b) & 0xFF) )
-
-#define NP_RGBW2WHITE(rgbw)  (((rgbw) & 0xFF000000UL) >> 24)
-#define NP_RGBW(r, g, b, w)  ( ((uint32_t)(w) & 0xFF) << 24 \
-                             | ((uint32_t)(r) & 0xFF) << 16 \
-                             | ((uint32_t)(g) & 0xFF) << 8  \
-                             | ((uint32_t)(b) & 0xFF) )
-
-typedef struct sNeopixel
-{
-   uint32_t index;
-   uint32_t rgb;
-} tNeopixel;
-
-typedef enum
-{
-   NEOPIXEL_MODE_WS2812B,  /* RGB */
-   NEOPIXEL_MODE_SK6812B,  /* RGBW */
+typedef enum {
+    NEOPIXEL_MODE_WS2812B, /* RGB */
+    NEOPIXEL_MODE_SK6812B, /* RGBW */
 } eNeopixelMode;
 
 /*! \brief Create a neopixel context
-  * \param pixels Number of pixels
-  * \param dout_pin Physical pin to send neopixel data (e.g. GPIO_NUM_27)
-  * \param mode Neopixel mode (one of NEOPIXEL_MODE_*)
-  * \returns Pointer to neopixel context, used as the first parameter
-  *          to subsequent neopixel function calls
-  */
-tNeopixelContext neopixel_Initialize(uint32_t pixels, int dout_pin, eNeopixelMode mode);
+ * \param pixels Number of pixels
+ * \param dout_pin Physical pin to send neopixel data (e.g. GPIO_NUM_27)
+ * \param mode Neopixel mode (one of NEOPIXEL_MODE_*)
+ * \returns Pointer to neopixel context, used as the first parameter
+ *          to subsequent neopixel function calls
+ */
+tNeopixelContext neopixel_Initialize(uint32_t pixels, gpio_num_t dout_pin, eNeopixelMode mode);
+
+// Erik
+void erik_SetNeopixel(tNeopixelContext ctx, uint32_t index, const ErikPixel pixel);
+
+bool erik_ShowNeopixels(tNeopixelContext ctx);
+bool erik_ShowNeopixels_noWait(tNeopixelContext ctx);
+void erik_ShowRing_noTask(tNeopixelContext ctx);
 
 /*! \brief Get minimum number of ticks between neopixel_SetPixel calls
  *  \param ctx Neopixel context received from successful neopixel_Init calls
@@ -63,26 +90,6 @@ uint32_t neopixel_GetRefreshRate(tNeopixelContext ctx);
  */
 void neopixel_Deinit(tNeopixelContext ctx);
 
-/*! \brief Set one or more pixels
- *  \param ctx Neopixel context received from successful neopixel_Init calls
- *  \param pixel Pointer to array of tNeopixel, pixels to set
- *  \param pixelCount Number of pixels in tNeopixel array
- *  \returns true on success, false on failure
- */
-bool neopixel_SetPixel(tNeopixelContext ctx, tNeopixel *pixel, uint32_t pixelCount);
-
-/*! \brief Create a WS2812 neopixel context
-  * \param pixels Number of pixels
-  * \param dout_pin Physical pin to send neopixel data (e.g. GPIO_NUM_27)
-  * \returns Pointer to neopixel context, used as the first parameter
-  *          to subsequent neopixel function calls
-  * Note: This function is depricated and included only for backward-compatibility.
-  *       Use: neopixel_Initialize(pixels, dout_pin, NEOPIXEL_MODEM_WS2812B)
-  */
-tNeopixelContext neopixel_Init(uint32_t pixels, int dout_pin);
-
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* _ESP32_NEOPIXEL_H */

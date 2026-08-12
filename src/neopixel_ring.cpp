@@ -1,8 +1,10 @@
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#include "esp_log.h"
-#include "driver/gpio.h"
+// #include <freertos/FreeRTOS.h>
+// #include <freertos/task.h>
+#include <esp_log.h>
+#include <driver/gpio.h>
+
 #include "neopixel.h"
+#include "neopixel_ring.h"
 
 // Erik
 #include "hal.h"
@@ -10,24 +12,32 @@
 #define TAG "NPIX"
 #define PIXEL_COUNT 84 // 2 rings in series, 60+24
 
+#define I2S_TIMEOUT_TICKS 1000
+
+static const ErikPixel black = {.bytes = {0, 0, 0, 0}};
+static const ErikPixel cyan = {.bytes = {0x28, 0x28, 0, 0}};
+
+static const ErikPixel blue = {.bytes = {0x28, 0, 0, 0}}; // BGR(W), .bytesBGRW = ...
+static const ErikPixel green = {.bytes = {0, 0x28, 0, 0}};
+static const ErikPixel red = {.bytes = {0, 0, 0x28, 0}};
+
+static const ErikPixel red32 = {.value = 0x280000}; // (W)RGB, .valueWRGB = ...
+static const ErikPixel green32 = {.value = 0x002800};
+static const ErikPixel blue32 = {.value = 0x000028};
+static const ErikPixel cyan32 = {.value = 0x002828};
+static const ErikPixel yellow32 = {.value = 0x282800};
+
 static tNeopixelContext npxContext = nullptr;
 
 static unsigned int minIntervalMillis = 0; // minimum time [ms] between ring updates
 
-#if (0 == 1)
-tNeopixel redPixel = {0, 0x280000};   // red pixel
-tNeopixel greenPixel = {0, 0x002800}; // green pixel
-tNeopixel bluePixel = {0, 0x000028};  // blue pixel
-#endif
+static void erik_EraseNeopixels(tNeopixelContext ctx) {
+    tNpContext *c = (tNpContext *)ctx;
 
-void eraseNeopixelRing(void) {
-    tNeopixel pixel[PIXEL_COUNT] = {}; // all black pixels
-    if (npxContext != nullptr) {
-        for (int i = 0; i < PIXEL_COUNT; i++) {
-            pixel[i].index = i; // set index for each pixel
-        }
-        neopixel_SetPixel(npxContext, &pixel[0], PIXEL_COUNT); // all black
+    for (int i = 0; i < PIXEL_COUNT; i++) {
+        erik_SetNeopixel(c, i, black);
     }
+    erik_ShowNeopixels(c); // send the data to the Neopixel ring
 }
 
 bool startNeopixelRing(void) {
@@ -45,49 +55,87 @@ bool startNeopixelRing(void) {
         return (false);
     }
 
-    // neopixel_SetPixel(npxContext, &blackPixel, PIXEL_COUNT); // all black
     uint32_t refreshRate = neopixel_GetRefreshRate(npxContext);
     if (refreshRate != 0) {
         minIntervalMillis = (1000 / neopixel_GetRefreshRate(npxContext)) + 1; // minimum time [ms] between ring updates (+1 for integer rounding)
+        minIntervalMillis++;                                                  // add 1 ms for overhead (RTOS task scheduling, enable/disable I2S channel, etc)
     }
 
     if (minIntervalMillis < 3) {
-        minIntervalMillis = 3; // to allow for RTOS task scheduling
+        minIntervalMillis = 3; // absolute minimum time [ms] between ring updates, to avoid overrun of the I2S channel
     }
     ESP_LOGI(TAG, "Neopixel ring minimum update interval=%d ms", minIntervalMillis);
 
-    hal.setNeoPixelEnable(true); // enable the data output
-    delay(10);                   // allow time for the 74HCT126 to enable the output
-    eraseNeopixelRing();         // erase possible old pixels
+    hal.setNeoPixelEnable(true);     // enable the data output
+    delay(10);                       // allow time for the 74HCT126 to enable the output
+    erik_EraseNeopixels(npxContext); // erase possible old pixels
     return (true);
 }
 
-void loopNeopixelRing(unsigned long currentMillis) {
-    static unsigned long timeoutMillis = 0;
-    static int redIndex = 0;
-    static int blackIndex = PIXEL_COUNT - 1;
-    tNeopixel pixel[2]; // for Red and Black pixel
+void eraseNeopixelRing(void) {
+    erik_EraseNeopixels(npxContext);
+}
 
+void loopNeopixelRing(unsigned long currentMillis) {
+    static int coloredIndex = 0;
+    static int blackIndex = PIXEL_COUNT - 1;
+    static int erikLoopStartMillis = 0;
+    static int erikMaxMillisPerLoop = 0;
+
+#if (0 == 1)
+    // Throttle the ring updates to allow time for the previous neopixel_SetPixel() to complete before sending new data
+    static unsigned long timeoutMillis = 0;
     if ((long)(currentMillis - timeoutMillis) < 0) {
         return; // allow time for the previous neopixel_SetPixel() to complete before sending new data
     }
+    timeoutMillis = currentMillis + minIntervalMillis; // allow time to send new data to the Neopixel LEDs
+#endif
 
     if (npxContext == nullptr) {
         // No Neopixel ring, silently ignore
         return;
     }
 
-    // Set the current pixel to red, previous to black
-    pixel[0].index = blackIndex;
-    pixel[0].rgb = 0x000000; // Black pixel
-    pixel[1].index = redIndex;
-    pixel[1].rgb = 0x280000; // Red pixel, moderate brightness
-    neopixel_SetPixel(npxContext, &pixel[0], 2);
+    erik_SetNeopixel(npxContext, blackIndex, black); // erase previously colored pixel
+    erik_SetNeopixel(npxContext, coloredIndex, red); // set new colored pixel
+    if (erik_ShowNeopixels(npxContext)) {            // send the data to the Neopixel ring
+        // Update the pixel indexes for the next iteration
+        blackIndex = coloredIndex;
+        if (++coloredIndex >= PIXEL_COUNT) {
+            // New loop
+            coloredIndex = 0;
 
-    // Update the pixel indexes for the next iteration
-    blackIndex = redIndex;
-    if (++redIndex >= PIXEL_COUNT) {
-        redIndex = 0;
-    }
-    timeoutMillis = currentMillis + minIntervalMillis; // allow time to send new data to the Neopixel LEDs
+            // Ring loop speed
+            if (erikLoopStartMillis != 0) {
+                int erikLoopMillis = currentMillis - erikLoopStartMillis;
+                if (erikLoopMillis > erikMaxMillisPerLoop) {
+                    erikMaxMillisPerLoop = erikLoopMillis;
+                    ESP_LOGI(TAG, "Max millis per loop = %d", erikMaxMillisPerLoop);
+                }
+            }
+            erikLoopStartMillis = currentMillis;
+
+            // Used chunks
+            tNpContext *c = (tNpContext *)npxContext;
+            static int reportedMaxErikChunksSent = 0;
+            if (c->erikMaxChunksSent > reportedMaxErikChunksSent) {
+                reportedMaxErikChunksSent = c->erikMaxChunksSent;
+                ESP_LOGI(TAG, "erikMaxChunksSent=%d", reportedMaxErikChunksSent);
+            }
+
+            // Transmit overflows - Currently, on_send_q_ovf callback is not used in neopixel.cpp
+            static int reportedMaxErikOverflowCount = 0;
+            if (c->erikOverflowCount > reportedMaxErikOverflowCount) {
+                reportedMaxErikOverflowCount = c->erikOverflowCount;
+                ESP_LOGW(TAG, "erikOverflowCount=%d", reportedMaxErikOverflowCount);
+            }
+
+            // Task overruns
+            static int reportedMaxErikTaskOverrunCount = 0;
+            if (c->erikTaskOverrunCount > reportedMaxErikTaskOverrunCount) {
+                reportedMaxErikTaskOverrunCount = c->erikTaskOverrunCount;
+                ESP_LOGW(TAG, "erikTaskOverrunCount=%d", reportedMaxErikTaskOverrunCount);
+            }
+        }
+    } // else: busy, try again later
 }
