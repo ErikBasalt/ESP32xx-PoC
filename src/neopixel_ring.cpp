@@ -1,13 +1,9 @@
-// #include <freertos/FreeRTOS.h>
-// #include <freertos/task.h>
 #include <esp_log.h>
 #include <driver/gpio.h>
 
+#include "hal.h"
 #include "neopixel.h"
 #include "neopixel_ring.h"
-
-// Erik
-#include "hal.h"
 
 #define TAG "RING"
 #define PIXEL_COUNT 84 // 2 rings in series, 60+24

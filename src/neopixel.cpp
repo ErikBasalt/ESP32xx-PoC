@@ -2,17 +2,8 @@
  * \license This file is released under the MIT License. See the LICENSE file for details.
  * \brief ESP32 Neopixel Driver
  */
-// #include <esp_heap_caps.h>
 #include <esp_system.h>
 #include <esp_log.h>
-// #include <freertos/task.h>
-
-// next inclides are already part of neopixel.h
-// #include <driver/i2s_std.h>
-// #include <driver/i2s_common.h>
-// #include <freertos/FreeRTOS.h>
-// #include <freertos/semphr.h>
-// #include <stdint.h>
 
 #include "neopixel.h"
 #include "ws2812b_protocol.h"
@@ -24,7 +15,7 @@
 
 // Enabling the I2S channel only once (at init) would make sense, but does NOT work properly.
 // Seems like the sent data is somehow multiplied by nr of DMA buffers, so with dma_desc_num=6 you get 6 red pixels i/o 1
-#define ERIK_ENABLE_I2S_CHANNEL_ONLY_ONCE 0
+#define ENABLE_I2S_CHANNEL_ONLY_ONCE 0
 
 static void neopixel_task(void *arg);
 static bool i2s_tx_queue_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
@@ -116,7 +107,7 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &c->i2s, NULL)); /* Tx channel only (no Rx) */
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(c->i2s, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_register_event_callback(c->i2s, &callbacks, c));
-#if (ERIK_ENABLE_I2S_CHANNEL_ONLY_ONCE == 1)
+#if (ENABLE_I2S_CHANNEL_ONLY_ONCE == 1)
     ESP_LOGI(TAG, "Enabling I2S channel only once at init");
     ESP_ERROR_CHECK(i2s_channel_enable(c->i2s));
 #else
@@ -184,7 +175,7 @@ bool neopixel_Show(tNeopixelContext ctx) {
     return (true);              // always true, but keep return value to be comptatible with neopixel_ShowNoWait()
 }
 
-void erik_ShowRing_noTask(tNeopixelContext ctx) { // Did NOT get it to work so far...
+void neopixel_Show_noTask(tNeopixelContext ctx) { // Did NOT get it to work so far...
 
     tNpContext *c = (tNpContext *)ctx;
 
@@ -194,11 +185,11 @@ void erik_ShowRing_noTask(tNeopixelContext ctx) { // Did NOT get it to work so f
 // Fill buffer
 //@@@TODO: only now translate pixels to timing bit buffer
 #if (0 == 1)
-    static uint8_t erik_buffer[(84 * WS2812B_BYTES_PER_PIXEL) + WS2812B_RESET_BYTES]; //@@@TODO: use PIXEL_COUNT instead of 84
-    memcpy(erik_buffer, c->buffer, c->bufferSize);
+    static uint8_t buffer[(84 * WS2812B_BYTES_PER_PIXEL) + WS2812B_RESET_BYTES]; //@@@TODO: use PIXEL_COUNT instead of 84
+    memcpy(buffer, c->buffer, c->bufferSize);
 #else
     // no copy
-    uint8_t *erik_buffer = c->buffer;
+    uint8_t *buffer = c->buffer;
 #endif
 
     // Send buffer
@@ -206,17 +197,16 @@ void erik_ShowRing_noTask(tNeopixelContext ctx) { // Did NOT get it to work so f
     c->bytesSent = 0;
     c->stats.chunksSent = 0;
 
-    i2s_channel_preload_data(c->i2s, erik_buffer, c->bufferSize, &bytesLoaded);
+    i2s_channel_preload_data(c->i2s, buffer, c->bufferSize, &bytesLoaded);
     i2s_channel_enable(c->i2s);
     if (bytesLoaded < c->bufferSize) {
-        i2s_channel_write(c->i2s, &erik_buffer[bytesLoaded], c->bufferSize - bytesLoaded,
+        i2s_channel_write(c->i2s, &buffer[bytesLoaded], c->bufferSize - bytesLoaded,
                           NULL, I2S_TIMEOUT_TICKS);
     } //@@@TODO: else??
 
     // Do NOT wait until all data has been sent
     // Instead, use polling in loopNeopixelRing() to check if the data has been sent
-    // @@@TODO: add noWait param?
-    // xSemaphoreTake(c->erikDataSent, portMAX_DELAY);
+    // xSemaphoreTake(c->dataSent, portMAX_DELAY);
 }
 
 uint32_t neopixel_GetRefreshRate(tNeopixelContext ctx) {
@@ -234,7 +224,6 @@ static IRAM_ATTR bool i2s_tx_queue_sent_callback(i2s_chan_handle_t handle, i2s_e
     c->bytesSent += event->size;
     c->stats.chunksSent++;
     if (c->bytesSent >= c->bufferSize) {
-        // Erik added
         if (c->stats.chunksSent > c->stats.maxChunksSent) {
             c->stats.maxChunksSent = c->stats.chunksSent;
         }
@@ -282,7 +271,7 @@ static void neopixel_task(void *arg) {
 
         c->bytesSent = 0;
         c->stats.chunksSent = 0;
-#if (ERIK_ENABLE_I2S_CHANNEL_ONLY_ONCE == 1)
+#if (ENABLE_I2S_CHANNEL_ONLY_ONCE == 1)
         // No preload possible, don't do enable/disable, just write the data to the I2S channel
         bytesLoaded = 0; // nothing preloaded
 #else
@@ -294,7 +283,7 @@ static void neopixel_task(void *arg) {
                               NULL, I2S_TIMEOUT_TICKS);
         } //@@@TODO: else??
         xSemaphoreTake(c->dataSent, portMAX_DELAY); /* Wait for buffer to be transferred to hardware */
-#if (ERIK_ENABLE_I2S_CHANNEL_ONLY_ONCE == 1)
+#if (ENABLE_I2S_CHANNEL_ONLY_ONCE == 1)
         // No disable after sending
 #else
         i2s_channel_disable(c->i2s);

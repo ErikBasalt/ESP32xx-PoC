@@ -4,15 +4,10 @@
  * \brief ESP32 Neopixel Driver
  */
 
-#include <freertos/FreeRTOS.h> //@@@TODO: do we need all these here, or can move partly to .cpp ?
+#include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <driver/i2s_std.h>
 #include <driver/i2s_common.h>
-
-#include <stdint.h>
-#include <stdbool.h>
-
-#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,12 +67,10 @@ typedef enum {
  */
 tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNeopixelMode mode);
 
-// Erik
 void neopixel_SetColor(tNeopixelContext ctx, uint32_t index, const PixelColor pixel);
-
 bool neopixel_Show(tNeopixelContext ctx);
 bool neopixel_ShowNoWait(tNeopixelContext ctx);
-void erik_ShowRing_noTask(tNeopixelContext ctx);
+void neopixel_Show_noTask(tNeopixelContext ctx);
 
 /*! \brief Get minimum number of ticks between neopixel_SetPixel calls
  *  \param ctx Neopixel context received from successful neopixel_Init calls
