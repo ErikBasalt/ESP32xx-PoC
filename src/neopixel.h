@@ -32,6 +32,12 @@ struct neoPixelStatistics {
     uint32_t maxChunksSent;
     uint32_t overflowCount;
     uint32_t taskOverrunCount;
+    uint32_t writeTimeoutCount;
+    uint32_t writeInvalidArgCount;
+    uint32_t writeInvalidStateCount;
+    uint32_t writeOtherErrorCount;
+    size_t bytesWritten[10];
+    uint32_t newDataCounter;
 };
 
 typedef struct sNpContext {
@@ -70,7 +76,12 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
 void neopixel_SetColor(tNeopixelContext ctx, uint32_t index, const PixelColor pixel);
 bool neopixel_Show(tNeopixelContext ctx);
 bool neopixel_ShowNoWait(tNeopixelContext ctx);
-void neopixel_Show_noTask(tNeopixelContext ctx);
+bool neopixel_Show_noTask(tNeopixelContext ctx);
+bool neopixel_Show_wrapper(tNeopixelContext ctx);
+
+#if (15 == 15)
+void neopixel_clear_buffer(tNeopixelContext ctx);
+#endif
 
 /*! \brief Get minimum number of ticks between neopixel_SetPixel calls
  *  \param ctx Neopixel context received from successful neopixel_Init calls

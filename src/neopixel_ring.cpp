@@ -6,7 +6,12 @@
 #include "neopixel_ring.h"
 
 #define TAG "RING"
+#if (31 == 0)
+#define DUMMY_PIXEL_COUNT 10
+#define PIXEL_COUNT (84 + DUMMY_PIXEL_COUNT) // 2 rings in series, 60+24
+#else
 #define PIXEL_COUNT 84 // 2 rings in series, 60+24
+#endif
 
 #define I2S_TIMEOUT_TICKS 1000
 
@@ -15,7 +20,7 @@ static const PixelColor cyan = {.bytes = {0x28, 0x28, 0, 0}};
 
 static const PixelColor blue = {.bytes = {0x28, 0, 0, 0}}; // BGR(W), .bytesBGRW = ...
 static const PixelColor green = {.bytes = {0, 0x28, 0, 0}};
-static const PixelColor red = {.bytes = {0, 0, 0x28, 0}};
+static const PixelColor red = {.bytes = {0, 0, 0x10, 0}};
 
 static const PixelColor red32 = {.value = 0x280000}; // (W)RGB, .valueWRGB = ...
 static const PixelColor green32 = {.value = 0x002800};
@@ -33,7 +38,7 @@ static void allBlack(tNeopixelContext ctx) {
     for (int i = 0; i < PIXEL_COUNT; i++) {
         neopixel_SetColor(c, i, black);
     }
-    neopixel_Show(c); // send the data to the Neopixel ring
+    neopixel_Show_wrapper(c); // send the data to the Neopixel ring
 }
 
 bool startNeopixelRing(void) {
@@ -50,6 +55,14 @@ bool startNeopixelRing(void) {
         ESP_LOGE(TAG, "Failed to initialize NeoPixel ring");
         return (false);
     }
+
+#if (0 == 19)
+    //@@@TODO: helpt niet, remove?
+    // #include "driver/gpio.h"
+    ESP_ERROR_CHECK(gpio_set_drive_capability(dataPin, GPIO_DRIVE_CAP_3));
+    ESP_ERROR_CHECK(gpio_pullup_dis(dataPin));
+    ESP_ERROR_CHECK(gpio_pulldown_dis(dataPin));
+#endif
 
     uint32_t refreshRate = neopixel_GetRefreshRate(npxContext);
     if (refreshRate != 0) {
@@ -74,10 +87,14 @@ void allBlackNeopixelRing(void) { // for console command
 
 void loopNeopixelRing(unsigned long currentMillis) {
     static int coloredIndex = 0;
+#if (31 == 0)
+    static int blackIndex = (PIXEL_COUNT - DUMMY_PIXEL_COUNT) - 1;
+#else
     static int blackIndex = PIXEL_COUNT - 1;
+#endif
     static int loopStartMillis = 0;
     static int maxMillisPerLoop = 0;
-
+    delay(100); //@@@TODO: remove
 #if (0 == 1)
     // Throttle the ring updates to allow time for the previous neopixel_SetPixel() to complete before sending new data
     static unsigned long timeoutMillis = 0;
@@ -91,13 +108,20 @@ void loopNeopixelRing(unsigned long currentMillis) {
         // No Neopixel ring, silently ignore
         return;
     }
-
+#if (0 == 15)
+    neopixel_clear_buffer(npxContext); // clear the buffer to avoid spurious colors on the ring
+    // allBlack(npxContext);
+#endif
     neopixel_SetColor(npxContext, blackIndex, black); // erase previously colored pixel
     neopixel_SetColor(npxContext, coloredIndex, red); // set new colored pixel
-    if (neopixel_Show(npxContext)) {                  // send the data to the Neopixel ring
+    if (neopixel_Show_wrapper(npxContext)) {          // send the data to the Neopixel ring
         // Update the pixel indexes for the next iteration
         blackIndex = coloredIndex;
+#if (31 == 0)
+        if (++coloredIndex >= (PIXEL_COUNT - DUMMY_PIXEL_COUNT)) { // New loop
+#else
         if (++coloredIndex >= PIXEL_COUNT) {
+#endif
             // New loop
             coloredIndex = 0;
 
@@ -106,7 +130,7 @@ void loopNeopixelRing(unsigned long currentMillis) {
                 int loopMillis = currentMillis - loopStartMillis;
                 if (loopMillis > maxMillisPerLoop) {
                     maxMillisPerLoop = loopMillis;
-                    ESP_LOGI(TAG, "Max millis per loop = %d", maxMillisPerLoop);
+                    ESP_LOGI(TAG, "Max millis per ring loop = %d", maxMillisPerLoop);
                 }
             }
             loopStartMillis = currentMillis;
@@ -132,6 +156,36 @@ void loopNeopixelRing(unsigned long currentMillis) {
                 reportedMaxTaskOverrunCount = c->stats.taskOverrunCount;
                 ESP_LOGW(TAG, "taskOverrunCount=%d", reportedMaxTaskOverrunCount);
             }
+
+            // Write errors
+            static int reportedMaxWriteTimeoutCount = 0;
+            if (c->stats.writeTimeoutCount > reportedMaxWriteTimeoutCount) {
+                reportedMaxWriteTimeoutCount = c->stats.writeTimeoutCount;
+                ESP_LOGW(TAG, "writeTimeoutCount=%d", reportedMaxWriteTimeoutCount);
+            }
+            static int reportedMaxWriteInvalidArgCount = 0;
+            if (c->stats.writeInvalidArgCount > reportedMaxWriteInvalidArgCount) {
+                reportedMaxWriteInvalidArgCount = c->stats.writeInvalidArgCount;
+                ESP_LOGW(TAG, "writeInvalidArgCount=%d", reportedMaxWriteInvalidArgCount);
+            }
+            static int reportedMaxWriteInvalidStateCount = 0;
+            if (c->stats.writeInvalidStateCount > reportedMaxWriteInvalidStateCount) {
+                reportedMaxWriteInvalidStateCount = c->stats.writeInvalidStateCount;
+                ESP_LOGW(TAG, "writeInvalidStateCount=%d", reportedMaxWriteInvalidStateCount);
+            }
+            static int reportedMaxWriteOtherErrorCount = 0;
+            if (c->stats.writeOtherErrorCount > reportedMaxWriteOtherErrorCount) {
+                reportedMaxWriteOtherErrorCount = c->stats.writeOtherErrorCount;
+                ESP_LOGW(TAG, "writeOtherErrorCount=%d", reportedMaxWriteOtherErrorCount);
+            }
+            for (int i = 0; i < 10; i++) {
+                static size_t reportedBytesWritten[10] = {0};
+                if (c->stats.bytesWritten[i] != reportedBytesWritten[i]) {
+                    reportedBytesWritten[i] = c->stats.bytesWritten[i];
+                    ESP_LOGI(TAG, "bytesWritten[%d]=%zu", i, reportedBytesWritten[i]);
+                }
+            }
+            // ESP_LOGI(TAG, "newDataCounter=%d", c->stats.newDataCounter);
         }
     } // else: busy, try again later
 }
