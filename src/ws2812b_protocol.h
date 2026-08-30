@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 
-#define WS2812B_4BIT_MODE 1
+#define WS2812B_4BIT_MODE 0
 #if (WS2812B_4BIT_MODE == 1)
 // #define WS2812B_ZERO 0b1000 @@@TODO: not used, not tested, remove?
 // #define WS2812B_ONE 0b1110

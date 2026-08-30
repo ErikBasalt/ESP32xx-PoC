@@ -10,7 +10,7 @@
 #define DUMMY_PIXEL_COUNT 10
 #define PIXEL_COUNT (84 + DUMMY_PIXEL_COUNT) // 2 rings in series, 60+24
 #else
-#define PIXEL_COUNT 84 // 2 rings in series, 60+24
+#define PIXEL_COUNT 84 // 2 rings in series: 60+24, 453 pixels with 3-bytes/color = 4093 bytes
 #endif
 
 #define I2S_TIMEOUT_TICKS 1000
@@ -78,6 +78,8 @@ bool startNeopixelRing(void) {
     hal.setNeoPixelEnable(true); // enable the data output
     delay(10);                   // allow time for the 74HCT126 to enable the output
     allBlack(npxContext);        // ring may have spurious colors on power-up, make them all black
+    // allBlack(npxContext);                                // ring may have spurious colors on power-up, make them all black
+    //((tNpContext *)npxContext)->stats.maxChunksSent = 0; //@@@@@@@
     return (true);
 }
 
@@ -108,7 +110,7 @@ void loopNeopixelRing(unsigned long currentMillis) {
         // No Neopixel ring, silently ignore
         return;
     }
-#if (0 == 15)
+#if (15 == 0)
     neopixel_clear_buffer(npxContext); // clear the buffer to avoid spurious colors on the ring
     // allBlack(npxContext);
 #endif

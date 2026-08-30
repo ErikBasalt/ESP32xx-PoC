@@ -21,16 +21,66 @@
 #define I2S_TIMEOUT_TICKS 1000
 #define NEOPIXEL_TASK_PRIORITY (configMAX_PRIORITIES - 1)
 
+#if (SOC_I2S_HW_VERSION_1)
+// NOTE: !! VSC is not aware of this define, therefore syntax highlighting does NOT work here !!
+
+//-------------------------------------------------------------------
+// SOC_I2S_HW_VERSION_1 chip (the original ESP32 and ESP32-S2)
+//-------------------------------------------------------------------
+
+// There is no simple big_endian boolean flag in the I2S configuration struct
+// The hardware architecture inherently expects data to be fed into the FIFO in Little-Endian format
+// The software (here) must handle any necessary byte swapping for big-endian data.
+#define NEOPIXEL_ENABLE_BIG_ENDIAN 0
+
+// The software (here) must prevent I2S transmit overruns
+// Without this, the I2S channel will be disabled too early (using enable/disable at every tx), causing last 13 neopixels staying black
+#define NEOPIXEL_PREVENT_OVERRUNS 1
+#else
+//-------------------------------------------------------------------
+// SOC_I2S_HW_VERSION_2 chip (ESP32-S3 and later, incl C3 and C6)
+//-------------------------------------------------------------------
+// I2S hardware can handle big-endian mode directly
+#define NEOPIXEL_ENABLE_BIG_ENDIAN 1
+
+// I2S driver blocks until ready, no need for extra measures to prevent transmit overruns
+#define NEOPIXEL_PREVENT_OVERRUNS 0 //@@@TODO: could also be 1, any benefit?
+#endif
+
+// @@@TODO: evaluate why using preload prevents having to clear the buffer twice
+#define NEOPIXEL_USE_PRELOAD 1
+
+#if (NEOPIXEL_USE_PRELOAD)
+#if (NEOPIXEL_PREVENT_OVERRUNS == 0)
+// Enforce preventing overruns, otherwise not getting write completion feedback
+#undef NEOPIXEL_PREVENT_OVERRUNS
+#define NEOPIXEL_PREVENT_OVERRUNS 1
+#endif
+#endif
+
+// Statistical
+#define NEOPIXEL_MEASURE_MAX_WRITE_MICROS 1
+
 // Enabling the I2S channel only once (at init) would make sense, but does NOT work properly.
 // Seems like the sent data is somehow multiplied by nr of DMA buffers, so with dma_desc_num=6 you get 6 red pixels i/o 1
-#define ENABLE_I2S_CHANNEL_ONLY_ONCE 1
+#define ENABLE_I2S_CHANNEL_ONLY_ONCE 0 //@@TODO: legacy try for Task version, remove
+#define ENABLE_I2S_CHANNEL_EVERY_WRITE 1
+
+#define ENABLE_I2S_OVERFLOW_CALLBACK 0 // @@@TODO: geeft altijd overruns met preload?
+
+#define ENABLE_I2S_SENT_CALLBACK 1
 #define ENABLE_I2S_TASK_VERSION 0
 
 #if (ENABLE_I2S_TASK_VERSION == 1)
 static void neopixel_task(void *arg);
+#endif
+#if (ENABLE_I2S_SENT_CALLBACK == 1)
 static bool i2s_tx_queue_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
 #endif
+
+#if (ENABLE_I2S_OVERFLOW_CALLBACK == 1)
 static bool i2s_tx_queue_overflow_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
+#endif
 
 static void setpixel_ws2812b(void *c, uint32_t index, const PixelColor color);
 static void setpixel_sk6812b(void *c, uint32_t index, const PixelColor color);
@@ -84,23 +134,40 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
     std_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_16BIT;
     std_cfg.slot_cfg.ws_width = I2S_DATA_BIT_WIDTH_16BIT;
 #endif
-#if (30 == 30)
-    // Dwing de ESP32 hardware om de bytes om te draaien tijdens de DMA-overdracht
-// Alleen beschikbaar op C3/C6/S3 architecturen in v5.5:
-#if !SOC_I2S_HW_VERSION_1
-    std_cfg.slot_cfg.big_endian = true;
+
+#if (NEOPIXEL_ENABLE_BIG_ENDIAN)
+    std_cfg.slot_cfg.big_endian = true; // let the ESP32xx hardware handle big-endian mode
+    ESP_LOGI(TAG, "Big-endian mode");
+#else
+    // Do little-endian byte swapping in software
+    ESP_LOGI(TAG, "Little-endian mode (ESP32, ESP32-S2)");
 #endif
+#if (NEOPIXEL_PREVENT_OVERRUNS)
+    ESP_LOGI(TAG, "Software is preventing I2S transmit overruns");
+#else
+    ESP_LOGI(TAG, "Software is NOT preventing I2S transmit overruns");
+#endif
+
+#if (NEOPIXEL_USE_PRELOAD)
+    ESP_LOGI(TAG, "Using preload for I2S transmit");
+#else
+    ESP_LOGI(TAG, "NOT using preload for I2S transmit");
 #endif
 
     i2s_event_callbacks_t callbacks = {
         .on_recv = NULL,
         .on_recv_q_ovf = NULL,
-#if (ENABLE_I2S_TASK_VERSION == 1)
+#if (ENABLE_I2S_SENT_CALLBACK == 1)
         .on_sent = i2s_tx_queue_sent_callback,
 #else
         .on_sent = NULL,
 #endif
-        .on_send_q_ovf = NULL, // i2s_tx_queue_overflow_callback makes no sense, will increase anyway whether or not using enable/disable I2S channel
+
+#if (ENABLE_I2S_OVERFLOW_CALLBACK == 1)
+        .on_send_q_ovf = i2s_tx_queue_overflow_callback,
+#else
+        .on_send_q_ovf = NULL,
+#endif
     };
 
     c = (tNpContext *)malloc(sizeof(*c));
@@ -120,7 +187,7 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
         // Do the reset bytes in a separate DMA buffer, separate write call
 #elif (43 == 0)
         c->bufferSize = (c->nrPixels * WS2812B_BYTES_PER_PIXEL) + 128;
-#elif (44 == 44)
+#elif (44 == 0)
         c->bufferSize = (c->nrPixels * WS2812B_BYTES_PER_PIXEL) + WS2812B_RESET_BYTES;
         //@@@TODO: bepaal minimum gebaseerd op bitrate
 #define MIN_DMA_BUFFER_SIZE 896 // minimum DMA buffer size that can be sent without glitches, 768 is too small
@@ -148,10 +215,10 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
     ESP_LOGI(TAG, "nrPixels=%d, bit buffer size=%d bytes, bitrate=%d bps", c->nrPixels, c->bufferSize, c->bitrate);
 
 #if (7 == 7)
-#if (15 == 15)
+#if (15 == 0)
     c->bufferSize = (c->bufferSize + 63) & ~0x3f; // round up to multiple of 64 bytes
                                                   // Calculate DMA frame_num based on bufferSize, but keep it within reasonable limits (e.g. 128-512 frames per buffer)
-#if (45 == 45)
+#if (45 == 0)
     if ((c->bufferSize % 256) == 0) { // buffer size is a multiple of 256 bytes, which seems to cause glitches in the data signal (PXD)
 #define EXTRA_DMA_BUFFER_SIZE 64      // add bytes to avoid glitches
         ESP_LOGW(TAG, "Buffer size=%d bytes is a multiple of 256 bytes, add %d bytes to avoid glitches", c->bufferSize, EXTRA_DMA_BUFFER_SIZE);
@@ -164,9 +231,9 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
     chan_cfg.dma_frame_num = 256;
 #endif
 #else
-    c->bufferSize = (c->bufferSize + 3) & ~3; // round up to multiple of 4 bytes
-    // Calculate DMA frame_num based on bufferSize, but keep it within reasonable limits (e.g. 128-512 frames per buffer)
     int frameSize = /*stereo=Slots*/ 2 * /*bytesPerSlot=*/2; // 16-bit stereo
+    c->bufferSize = (c->bufferSize + 3) & ~3;                // round up to multiple of 1 frame = 4 bytes
+    // Calculate DMA frame_num based on bufferSize, but keep it within reasonable limits (e.g. 128-512 frames per buffer)
     chan_cfg.dma_frame_num = c->bufferSize / frameSize;
 #endif
 #if (8 == 0)
@@ -175,7 +242,7 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
     c->bufferSize = chan_cfg.dma_frame_num * frameSize;         // adjust bufferSize to match frame_num
 #endif
 // chan_cfg.dma_frame_num /= 2; //@@@TODO: remove
-#if (0 == 9)
+#if (9 == 0)
     chan_cfg.dma_desc_num = 4; //@@@TODO: remove, helpt niet
 #else
     chan_cfg.dma_desc_num = 2;
@@ -185,8 +252,18 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
     chan_cfg.dma_frame_num += 100;
 #endif
     ESP_LOGI(TAG, "ADJUSTED: buffer size=%d bytes, DMA frames per buffer=%d, frameSize=%d, DMA buffers=%d", c->bufferSize, chan_cfg.dma_frame_num, frameSize, chan_cfg.dma_desc_num);
+
+#if (70 == 0)
+// with enable/diable channel, auto_clear is not needed anyway, and may cause extra cpu load or delay
+// additionally, should not be related to NEOPIXEL_ENABLE_BIG_ENDIAN
+#if (NEOPIXEL_ENABLE_BIG_ENDIAN == 1)
     //    chan_cfg.auto_clear_before_cb = true; // do not repeat old data once done
-    chan_cfg.auto_clear = true; // do not repeat old data once done
+    chan_cfg.auto_clear = true; // do not repeat old data once done (not really needed when enable/disable I2S channel at each transfer)
+#else
+    ESP_LOGW(TAG, "No auto_clear"); //@@@TODO: somehow this seems to cause the "missing 13 neopixels" issue ?!
+#endif
+#endif
+
 // std_cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_DEFAULT;  // @@@TODO: DEFAULT bestaat niet
 // std_cfg.slot_cfg.left_align = false; //@@@TODO: helpt niet, remove later
 // chan_cfg.intr_priority = 7; // set to relativly high priority @@@TODO: remove, helpt niet
@@ -194,6 +271,8 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
 
 #if (0 == 16)
     std_cfg.clk_cfg.sample_rate_hz = 78125; //@@@TODO: hierdoor ineens dips in de amplitude van het data signaal (PXD) !?
+#elif (60 == 60)
+    std_cfg.clk_cfg.sample_rate_hz = c->bitrate / (frameSize * 8); // bytes per sec
 #else
     std_cfg.clk_cfg.sample_rate_hz = c->bitrate / 16 / 2; // lahirunirmalx: 93750
 #endif
@@ -203,31 +282,40 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
     portMUX_INITIALIZE(&c->lock);
 
     c->newData = xSemaphoreCreateBinary();
-    c->dataSent = xSemaphoreCreateBinary();
     c->isReady = xSemaphoreCreateBinary();
     c->terminate = false;
 #endif
-    c->bytesSent = 0;
-    c->stats = {}; // reset all statistics to zero
+#if ((ENABLE_I2S_TASK_VERSION == 1) || (NEOPIXEL_PREVENT_OVERRUNS))
+    c->dataSent = xSemaphoreCreateBinary();
+
+#if (65 == 0)
+#if (NEOPIXEL_PREVENT_OVERRUNS) //@@@TODO: wasalso needed for Task version?
+    xSemaphoreGive(c->dataSent);
+#endif
+#endif
+
+#endif
+    c->bytesSent = 0; //@@@TODO: needed here?
+    c->stats = {};    // reset all statistics to zero
 
 #if (0 == 1)
     c->buffer = (uint8_t *)malloc(c->bufferSize);
-#elif (47 == 47)
+#elif (47 == 0)
     // esp32-s3 requires buffer to start at 64-byte aligned address
     //@@@TODO: helpt niet, remove?
     c->buffer = (uint8_t *)heap_caps_aligned_alloc(64, c->bufferSize, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
 #else
     c->buffer = (uint8_t *)heap_caps_malloc(c->bufferSize, MALLOC_CAP_DMA);
 #endif
-    memset(c->buffer, 0, c->bufferSize);                        /* initializes the reset bytes to zero */
+    memset(c->buffer, 0, c->bufferSize);                        /* initialise the reset bytes to zero */
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &c->i2s, NULL)); /* Tx channel only (no Rx) */
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(c->i2s, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_register_event_callback(c->i2s, &callbacks, c));
-#if (ENABLE_I2S_CHANNEL_ONLY_ONCE == 1)
+#if (ENABLE_I2S_CHANNEL_EVERY_WRITE)
+    ESP_LOGI(TAG, "Enabling/Disabling I2S channel at each transfer");
+#else
     ESP_LOGI(TAG, "Enabling I2S channel only once at init");
     ESP_ERROR_CHECK(i2s_channel_enable(c->i2s));
-#else
-    ESP_LOGI(TAG, "Enabling/Disabling I2S channel at each transfer");
 #endif
     ESP_LOGI(TAG, "I2S channel id=%d, interrupt priority=%d", chan_cfg.id, chan_cfg.intr_priority);
 
@@ -241,7 +329,7 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
     return (tNeopixelContext)c;
 }
 
-#if (15 == 15)
+#if (15 == 0)
 void neopixel_clear_buffer(tNeopixelContext ctx) {
     tNpContext *c = (tNpContext *)ctx;
     static const PixelColor black = {.bytes = {0, 0, 0, 0}};
@@ -310,22 +398,40 @@ bool neopixel_Show(tNeopixelContext ctx) {
 bool neopixel_Show_noTask(tNeopixelContext ctx) { // Did NOT get it to work so far...
 
     tNpContext *c = (tNpContext *)ctx;
+#if (NEOPIXEL_MEASURE_MAX_WRITE_MICROS)
+    static unsigned long maxWriteMicros = 0;
+    unsigned long startMicros = esp_timer_get_time();
+    unsigned long writeMicros;
+#endif
+
+#if (NEOPIXEL_USE_PRELOAD)
+    size_t bytesLoaded = 0;
+    i2s_channel_preload_data(c->i2s, c->buffer, c->bufferSize, &bytesLoaded);
+    if (bytesLoaded != c->bufferSize) {
+        ESP_LOGE(TAG, "i2s_channel_preload_data() loaded %d bytes, expected %d bytes", bytesLoaded, c->bufferSize);
+    }
+#endif
+
+#ifdef ENABLE_I2S_SENT_CALLBACK
+    c->bytesSent = 0;
+    c->stats.chunksSent = 0;
+#endif
+
+#if (ENABLE_I2S_CHANNEL_EVERY_WRITE == 1)
+    i2s_channel_enable(c->i2s);
+#endif
+
 #if (0 == 1)
     c->stats.newDataCounter++; //@@@TODO: needed for debugging only, remove later??
 
     // Send buffer
     c->bytesSent = 0;
-    c->stats.chunksSent = 0;
 
     static uint32_t idxWritten = 0;
     i2s_channel_write(c->i2s, c->buffer, c->bufferSize, &c->stats.bytesWritten[idxWritten], I2S_TIMEOUT_TICKS);
 
     idxWritten = (idxWritten + 1) % 10;
 #else
-    static unsigned long maxWriteMicros = 0;
-    unsigned long startMicros = esp_timer_get_time();
-    unsigned long writeMicros;
-    size_t bytesWritten;
 #if (0 == 14)
     // esp_cache_msync(c->buffer, c->bufferSize, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
 
@@ -352,36 +458,23 @@ bool neopixel_Show_noTask(tNeopixelContext ctx) { // Did NOT get it to work so f
         ESP_LOGE(TAG, "bufferSize=%d, expected=%d", c->bufferSize, 832);
     }
 #endif
+
 #if (0 == 19)
     vTaskSuspendAll(); //@@@TODO: remove, bevriest alle RTOS taken!!
 #endif
-#if (0 == 10)
-    //@@@TODO: helpt niet, remove
-    esp_err_t rv = i2s_channel_write(c->i2s, c->buffer, c->bufferSize, &bytesWritten, portMAX_DELAY);
+
+#if (NEOPIXEL_USE_PRELOAD)
+    // only preload, no write
 #else
+    // Write
+    size_t bytesWritten;
     esp_err_t rv = i2s_channel_write(c->i2s, c->buffer, c->bufferSize, &bytesWritten, I2S_TIMEOUT_TICKS);
-#endif
-#if (0 == 20)
-    i2s_channel_tx_wait_done(c->i2s, portMAX_DELAY);)   //@@@TODO: remove, bestaat niet meer in ESP-IDF 5.x
-#endif
-#if (0 == 12)
-    //@@@TODO: helpt niet, remove
-    esp_rom_delay_us(6000);
-#endif
-#if (0 == 19)
-    esp_rom_delay_us(200); // meer dan genoeg tijd om de data naar de Neopixels te sturen
-    xTaskResumeAll();      //@@@TODO: remove, start scheduler weer
-#endif
-    if (bytesWritten != c->bufferSize) {
+    if (bytesWritten != c->bufferSize) { //@@@TODO: remove, never happens as long as buffers fits in max DMA buffer size (4096)
         ESP_LOGE(TAG, "i2s_channel_write() wrote %d bytes, expected %d bytes", bytesWritten, c->bufferSize);
     }
-    switch (rv) {
+
+    switch (rv) { //@@@TODO: simplify to one error counter
     case ESP_OK:
-        writeMicros = esp_timer_get_time() - startMicros;
-        if (writeMicros > maxWriteMicros) {
-            maxWriteMicros = writeMicros;
-            ESP_LOGI(TAG, "maxWriteMicros=%lu", maxWriteMicros);
-        }
         break;
     case ESP_ERR_TIMEOUT:
         c->stats.writeTimeoutCount++;
@@ -397,6 +490,44 @@ bool neopixel_Show_noTask(tNeopixelContext ctx) { // Did NOT get it to work so f
         break;
     }
 #endif
+
+#if (NEOPIXEL_PREVENT_OVERRUNS)
+    //@@@TODO: investigate why this delay is necessary
+    // This delay seems to fix the "missing last 13 neopixels" issue, but causes massive overflowCounts
+    // Keeping auto_clear = false seems to solve the massive overflowCounts
+    // Still having maxChunksSent=2 with ESP32, not with other platforms
+    // Maybe use semaphore from sent callback instead of fixed delay?
+    // vTaskDelay(pdMS_TO_TICKS(3));
+    xSemaphoreTake(c->dataSent, portMAX_DELAY); // wait until DMA transfer is complete
+
+    //@@@TODO: is this extra delay required for ESP32(-S2) only, or also for ESP32-C3, C6 and S3?
+    vTaskDelay(pdMS_TO_TICKS(1)); // extra delay to ensure full DMA transfer completion, before disabling the channel
+#endif
+
+#if (ENABLE_I2S_CHANNEL_EVERY_WRITE == 1)
+    i2s_channel_disable(c->i2s);
+#endif
+
+#if (0 == 12)
+    //@@@TODO: helpt niet, remove
+    esp_rom_delay_us(6000);
+#endif
+#if (0 == 19)
+    esp_rom_delay_us(200); // meer dan genoeg tijd om de data naar de Neopixels te sturen
+    xTaskResumeAll();      //@@@TODO: remove, start scheduler weer
+#endif
+
+#if (NEOPIXEL_MEASURE_MAX_WRITE_MICROS)
+    writeMicros = esp_timer_get_time() - startMicros;
+    if (writeMicros > maxWriteMicros) {
+        maxWriteMicros = writeMicros;
+        ESP_LOGI(TAG, "maxWriteMicros=%lu", maxWriteMicros);
+    }
+
+#else
+#endif
+
+#endif
     // Do NOT wait until all data has been sent
     // Instead, use polling in loopNeopixelRing() to check if the data has been sent
     // xSemaphoreTake(c->dataSent, portMAX_DELAY);
@@ -405,12 +536,14 @@ bool neopixel_Show_noTask(tNeopixelContext ctx) { // Did NOT get it to work so f
     static const uint8_t dummy_flush[64] = {0};
     i2s_channel_write(c->i2s, dummy_flush, sizeof(dummy_flush), nullptr, I2S_TIMEOUT_TICKS);
 #endif
+#if (ENABLE_I2S_CHANNEL_EVERY_WRITE == 0)
 #if (42 == 42)
     //@@@TODO: is dit nog nodig, of is 1 groot data buffer met reset bytes aan het einde voldoende??
     //@@@TODO: kan NIET zondermeer weg, dan weer glitches
     // Do a dummy flush of zeros in separate DMA buffer, to ensure that the real data DMA buffer is completely sent before the driver stops
     static const uint8_t dummy_flush[48] = {0};
     i2s_channel_write(c->i2s, dummy_flush, sizeof(dummy_flush), nullptr, I2S_TIMEOUT_TICKS);
+#endif
 #endif
     return true; // @@@TODO: return value should indicate if the data has been sent or not, but for now always return true
 }
@@ -431,28 +564,33 @@ uint32_t neopixel_GetRefreshRate(tNeopixelContext ctx) {
 /* -------------------------------------------------------------------------------------------------------------
  * Helper Functions
  */
-#if (ENABLE_I2S_TASK_VERSION == 1)
+#if (ENABLE_I2S_SENT_CALLBACK == 1)
 static IRAM_ATTR bool i2s_tx_queue_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx) {
     // Finished sending one (1) DMA buffer
     tNpContext *c = (tNpContext *)user_ctx;
+    //    xSemaphoreGive(c->dataSent); //@@@TODO:remove
     c->bytesSent += event->size;
     c->stats.chunksSent++;
     if (c->bytesSent >= c->bufferSize) {
         if (c->stats.chunksSent > c->stats.maxChunksSent) {
             c->stats.maxChunksSent = c->stats.chunksSent;
         }
+#if ((ENABLE_I2S_TASK_VERSION == 1) || (NEOPIXEL_PREVENT_OVERRUNS))
         xSemaphoreGive(c->dataSent);
+#endif
     }
     return false; // no need for RTOS to check immediately for higher priority task
 }
 #endif
 
+#if (ENABLE_I2S_OVERFLOW_CALLBACK == 1)
 static IRAM_ATTR bool i2s_tx_queue_overflow_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx) {
     // @@@TODO: these overflows seem to be common?? for now, disabled this callback, but keep it here for future reference
     tNpContext *c = (tNpContext *)user_ctx;
     c->stats.overflowCount++;
     return false; // no need for RTOS to check immediately for higher priority task
 }
+#endif
 
 #if (ENABLE_I2S_TASK_VERSION == 1)
 static void neopixel_task(void *arg) {
@@ -585,10 +723,11 @@ static void setpixel_ws2812b(void *ctx, uint32_t index, const PixelColor color) 
             sequence = ws2812b_color_map[color.bytes.r];
         if (i == 6)
             sequence = ws2812b_color_map[color.bytes.b];
-#if (30 == 30)
-        buffer[offset] = sequence[i % WS2812B_BYTES_PER_COLOR]; // fill buffer linearly, no 16-bit little-endian format, let the driver swap bytes
+#if (NEOPIXEL_ENABLE_BIG_ENDIAN)
+        buffer[offset] = sequence[i % WS2812B_BYTES_PER_COLOR]; // using Big-endian, no need to swap bytes
 #else
-        buffer[offset ^ 1] = sequence[i % WS2812B_BYTES_PER_COLOR]; // fill buffer in 16-bit little-endian format
+        // buffer[offset] = __builtin_bswap32(sequence[i % WS2812B_BYTES_PER_COLOR]); // fill buffer in 16-bit Little-endian format
+        buffer[offset ^ 1] = sequence[i % WS2812B_BYTES_PER_COLOR]; // fill buffer in 16-bit Little-endian format
 #endif
     }
 }

@@ -79,7 +79,7 @@ bool neopixel_ShowNoWait(tNeopixelContext ctx);
 bool neopixel_Show_noTask(tNeopixelContext ctx);
 bool neopixel_Show_wrapper(tNeopixelContext ctx);
 
-#if (15 == 15)
+#if (15 == 0)
 void neopixel_clear_buffer(tNeopixelContext ctx);
 #endif
 
