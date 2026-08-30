@@ -595,6 +595,9 @@ const ws2812b_pixel ws2812b_color_map[256] = {
 typedef uint8_t ws2812b_pixel[WS2812B_BYTES_PER_COLOR];
 const ws2812b_pixel ws2812b_color_map[256] =
     {
+        //@@@TODO: see Zorxx issue #16: "ws21812b: Use correct lookup table", copy the correct lookup table from there to here
+        //@@@TODO: same table as sk6812b protocol (whicch is already correct), can these 2 tables be combined to avoid duplication?
+        //@@@TODO: maybe something like color_pattern_3bit[256]
         {0x92, 0x49, 0x24}, /* 0 */
         {0xd2, 0x49, 0x24}, /* 1 */
         {0x9a, 0x49, 0x24}, /* 2 */
