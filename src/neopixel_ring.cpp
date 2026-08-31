@@ -10,7 +10,7 @@
 #define DUMMY_PIXEL_COUNT 10
 #define PIXEL_COUNT (84 + DUMMY_PIXEL_COUNT) // 2 rings in series, 60+24
 #else
-#define PIXEL_COUNT 84 // 2 rings in series: 60+24, 453 pixels with 3-bytes/color = 4093 bytes
+#define PIXEL_COUNT (60 + 24 + 93) // 2 rings in series: 60+24, 453 pixels with 3-bytes/color = 4093 bytes
 #endif
 
 #define I2S_TIMEOUT_TICKS 1000
@@ -50,7 +50,12 @@ bool startNeopixelRing(void) {
     }
 
     ESP_LOGI(TAG, "Initializing NeoPixel ring on pin=%d with %d pixels", dataPin, PIXEL_COUNT);
+#if (81 == 0)
+    npxContext = neopixel_Initialize(PIXEL_COUNT, dataPin, NEOPIXEL_MODE_SK6812B);
+#else
     npxContext = neopixel_Initialize(PIXEL_COUNT, dataPin, NEOPIXEL_MODE_WS2812B);
+#endif
+
     if (npxContext == nullptr) {
         ESP_LOGE(TAG, "Failed to initialize NeoPixel ring");
         return (false);
@@ -96,7 +101,7 @@ void loopNeopixelRing(unsigned long currentMillis) {
 #endif
     static int loopStartMillis = 0;
     static int maxMillisPerLoop = 0;
-    delay(100); //@@@TODO: remove
+    // delay(100); //@@@TODO: remove
 #if (0 == 1)
     // Throttle the ring updates to allow time for the previous neopixel_SetPixel() to complete before sending new data
     static unsigned long timeoutMillis = 0;

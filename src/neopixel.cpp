@@ -6,8 +6,12 @@
 #include <esp_log.h>
 
 #include "neopixel.h"
+#if (80 == 80)
+#include "neopixel_seq3_protocols.h"
+#else
 #include "ws2812b_protocol.h"
 #include "sk6812b_protocol.h"
+#endif
 
 #if (0 == 14)
 #include "esp_cache.h"
@@ -66,19 +70,18 @@
 #define ENABLE_I2S_CHANNEL_ONLY_ONCE 0 //@@TODO: legacy try for Task version, remove
 #define ENABLE_I2S_CHANNEL_EVERY_WRITE 1
 
-#define ENABLE_I2S_OVERFLOW_CALLBACK 0 // @@@TODO: geeft altijd overruns met preload?
-
-#define ENABLE_I2S_SENT_CALLBACK 1
 #define ENABLE_I2S_TASK_VERSION 0
-
-#if (ENABLE_I2S_TASK_VERSION == 1)
+#if (ENABLE_I2S_TASK_VERSION)
 static void neopixel_task(void *arg);
 #endif
-#if (ENABLE_I2S_SENT_CALLBACK == 1)
+
+#define ENABLE_I2S_SENT_CALLBACK 1
+#if (ENABLE_I2S_SENT_CALLBACK)
 static bool i2s_tx_queue_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
 #endif
 
-#if (ENABLE_I2S_OVERFLOW_CALLBACK == 1)
+#define ENABLE_I2S_OVERFLOW_CALLBACK 0 // @@@TODO: when using preload, it will generate overflow at every preload, unless you preload (1 byte) less than the buffer size!?
+#if (ENABLE_I2S_OVERFLOW_CALLBACK)
 static bool i2s_tx_queue_overflow_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx);
 #endif
 
@@ -157,13 +160,13 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
     i2s_event_callbacks_t callbacks = {
         .on_recv = NULL,
         .on_recv_q_ovf = NULL,
-#if (ENABLE_I2S_SENT_CALLBACK == 1)
+#if (ENABLE_I2S_SENT_CALLBACK)
         .on_sent = i2s_tx_queue_sent_callback,
 #else
         .on_sent = NULL,
 #endif
 
-#if (ENABLE_I2S_OVERFLOW_CALLBACK == 1)
+#if (ENABLE_I2S_OVERFLOW_CALLBACK)
         .on_send_q_ovf = i2s_tx_queue_overflow_callback,
 #else
         .on_send_q_ovf = NULL,
@@ -234,7 +237,7 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
     int frameSize = /*stereo=Slots*/ 2 * /*bytesPerSlot=*/2; // 16-bit stereo
     c->bufferSize = (c->bufferSize + 3) & ~3;                // round up to multiple of 1 frame = 4 bytes
     // Calculate DMA frame_num based on bufferSize, but keep it within reasonable limits (e.g. 128-512 frames per buffer)
-    chan_cfg.dma_frame_num = c->bufferSize / frameSize;
+    chan_cfg.dma_frame_num = c->bufferSize / frameSize; //@@@TODO: limit to 4096 DMA bytes (1024 frames) and allow for mutiple DMA buffers?
 #endif
 #if (8 == 0)
     //@@@TODO: helpt niet, remove
@@ -272,20 +275,20 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
 #if (0 == 16)
     std_cfg.clk_cfg.sample_rate_hz = 78125; //@@@TODO: hierdoor ineens dips in de amplitude van het data signaal (PXD) !?
 #elif (60 == 60)
-    std_cfg.clk_cfg.sample_rate_hz = c->bitrate / (frameSize * 8); // bytes per sec
+    std_cfg.clk_cfg.sample_rate_hz = c->bitrate / (frameSize * 8); // frames per sec
 #else
     std_cfg.clk_cfg.sample_rate_hz = c->bitrate / 16 / 2; // lahirunirmalx: 93750
 #endif
 
-    ESP_LOGI(TAG, "I2S sample rate=%d Hz", std_cfg.clk_cfg.sample_rate_hz);
-#if (ENABLE_I2S_TASK_VERSION == 1)
+    ESP_LOGI(TAG, "I2S sample rate=%d frames/sec", std_cfg.clk_cfg.sample_rate_hz);
+#if (ENABLE_I2S_TASK_VERSION)
     portMUX_INITIALIZE(&c->lock);
 
     c->newData = xSemaphoreCreateBinary();
     c->isReady = xSemaphoreCreateBinary();
     c->terminate = false;
 #endif
-#if ((ENABLE_I2S_TASK_VERSION == 1) || (NEOPIXEL_PREVENT_OVERRUNS))
+#if ((ENABLE_I2S_TASK_VERSION) || (NEOPIXEL_PREVENT_OVERRUNS))
     c->dataSent = xSemaphoreCreateBinary();
 
 #if (65 == 0)
@@ -319,7 +322,7 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
 #endif
     ESP_LOGI(TAG, "I2S channel id=%d, interrupt priority=%d", chan_cfg.id, chan_cfg.intr_priority);
 
-#if (ENABLE_I2S_TASK_VERSION == 1)
+#if (ENABLE_I2S_TASK_VERSION)
     ESP_LOGI(TAG, "Using I2S channel with separate task");
     xTaskCreate(&neopixel_task, TAG, 1024, (void *)c, NEOPIXEL_TASK_PRIORITY, NULL);
 #else
@@ -406,13 +409,13 @@ bool neopixel_Show_noTask(tNeopixelContext ctx) { // Did NOT get it to work so f
 
 #if (NEOPIXEL_USE_PRELOAD)
     size_t bytesLoaded = 0;
-    i2s_channel_preload_data(c->i2s, c->buffer, c->bufferSize, &bytesLoaded);
-    if (bytesLoaded != c->bufferSize) {
-        ESP_LOGE(TAG, "i2s_channel_preload_data() loaded %d bytes, expected %d bytes", bytesLoaded, c->bufferSize);
+    esp_err_t rv = i2s_channel_preload_data(c->i2s, c->buffer, c->bufferSize, &bytesLoaded);
+    if (rv != ESP_OK) {
+        ESP_LOGE(TAG, "i2s_channel_preload_data() failed: rv=%d", rv);
     }
 #endif
 
-#ifdef ENABLE_I2S_SENT_CALLBACK
+#if (ENABLE_I2S_SENT_CALLBACK)
     c->bytesSent = 0;
     c->stats.chunksSent = 0;
 #endif
@@ -501,20 +504,12 @@ bool neopixel_Show_noTask(tNeopixelContext ctx) { // Did NOT get it to work so f
     xSemaphoreTake(c->dataSent, portMAX_DELAY); // wait until DMA transfer is complete
 
     //@@@TODO: is this extra delay required for ESP32(-S2) only, or also for ESP32-C3, C6 and S3?
+    //@@@TODO: this could also be helpful to match the >280 us Reset period of newer WB2812B (V5) sprc
     vTaskDelay(pdMS_TO_TICKS(1)); // extra delay to ensure full DMA transfer completion, before disabling the channel
 #endif
 
 #if (ENABLE_I2S_CHANNEL_EVERY_WRITE == 1)
     i2s_channel_disable(c->i2s);
-#endif
-
-#if (0 == 12)
-    //@@@TODO: helpt niet, remove
-    esp_rom_delay_us(6000);
-#endif
-#if (0 == 19)
-    esp_rom_delay_us(200); // meer dan genoeg tijd om de data naar de Neopixels te sturen
-    xTaskResumeAll();      //@@@TODO: remove, start scheduler weer
 #endif
 
 #if (NEOPIXEL_MEASURE_MAX_WRITE_MICROS)
@@ -523,8 +518,6 @@ bool neopixel_Show_noTask(tNeopixelContext ctx) { // Did NOT get it to work so f
         maxWriteMicros = writeMicros;
         ESP_LOGI(TAG, "maxWriteMicros=%lu", maxWriteMicros);
     }
-
-#else
 #endif
 
 #endif
@@ -549,7 +542,7 @@ bool neopixel_Show_noTask(tNeopixelContext ctx) { // Did NOT get it to work so f
 }
 
 bool neopixel_Show_wrapper(tNeopixelContext ctx) {
-#if (ENABLE_I2S_TASK_VERSION == 1)
+#if (ENABLE_I2S_TASK_VERSION)
     return neopixel_Show(ctx);
 #else
     return neopixel_Show_noTask(ctx);
@@ -564,7 +557,7 @@ uint32_t neopixel_GetRefreshRate(tNeopixelContext ctx) {
 /* -------------------------------------------------------------------------------------------------------------
  * Helper Functions
  */
-#if (ENABLE_I2S_SENT_CALLBACK == 1)
+#if (ENABLE_I2S_SENT_CALLBACK)
 static IRAM_ATTR bool i2s_tx_queue_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx) {
     // Finished sending one (1) DMA buffer
     tNpContext *c = (tNpContext *)user_ctx;
@@ -575,7 +568,7 @@ static IRAM_ATTR bool i2s_tx_queue_sent_callback(i2s_chan_handle_t handle, i2s_e
         if (c->stats.chunksSent > c->stats.maxChunksSent) {
             c->stats.maxChunksSent = c->stats.chunksSent;
         }
-#if ((ENABLE_I2S_TASK_VERSION == 1) || (NEOPIXEL_PREVENT_OVERRUNS))
+#if ((ENABLE_I2S_TASK_VERSION) || (NEOPIXEL_PREVENT_OVERRUNS))
         xSemaphoreGive(c->dataSent);
 #endif
     }
@@ -583,7 +576,7 @@ static IRAM_ATTR bool i2s_tx_queue_sent_callback(i2s_chan_handle_t handle, i2s_e
 }
 #endif
 
-#if (ENABLE_I2S_OVERFLOW_CALLBACK == 1)
+#if (ENABLE_I2S_OVERFLOW_CALLBACK)
 static IRAM_ATTR bool i2s_tx_queue_overflow_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx) {
     // @@@TODO: these overflows seem to be common?? for now, disabled this callback, but keep it here for future reference
     tNpContext *c = (tNpContext *)user_ctx;
@@ -592,7 +585,7 @@ static IRAM_ATTR bool i2s_tx_queue_overflow_callback(i2s_chan_handle_t handle, i
 }
 #endif
 
-#if (ENABLE_I2S_TASK_VERSION == 1)
+#if (ENABLE_I2S_TASK_VERSION)
 static void neopixel_task(void *arg) {
     tNpContext *c = (tNpContext *)arg;
     size_t bytesLoaded;
@@ -680,13 +673,13 @@ static void neopixel_task(void *arg) {
 
 #if (0 == 1)
 inline static void setpixel_ws2812b(uint8_t *buffer, uint32_t offset, const PixelColor color) {
-    const uint8_t *sequence = ws2812b_color_map[color.bytes.g];
+    const uint8_t *sequence = neopixel_seq3_color_map[color.bytes.g];
     for (int i = 0; i < WS2812B_BYTES_PER_PIXEL; ++i, ++offset) {
         if (i == 3)
-            sequence = ws2812b_color_map[color.bytes.r];
+            sequence = neopixel_seq3_color_map[color.bytes.r];
         if (i == 6)
-            sequence = ws2812b_color_map[color.bytes.b];
-        buffer[offset ^ 1] = sequence[i % WS2812B_BYTES_PER_COLOR]; // fill buffer in 16-bit little-endian format
+            sequence = neopixel_seq3_color_map[color.bytes.b];
+        buffer[offset ^ 1] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // fill buffer in 16-bit little-endian format
     }
 }
 
@@ -717,17 +710,17 @@ static void setpixel_ws2812b(void *ctx, uint32_t index, const PixelColor color) 
         ESP_LOGE(TAG, "setpixel_ws2812b: index %d out of range (0-%d)", index, c->nrPixels - 1);
         return;
     }
-    const uint8_t *sequence = ws2812b_color_map[color.bytes.g];
+    const uint8_t *sequence = neopixel_seq3_color_map[color.bytes.g];
     for (int i = 0; i < WS2812B_BYTES_PER_PIXEL; ++i, ++offset) {
         if (i == 3)
-            sequence = ws2812b_color_map[color.bytes.r];
+            sequence = neopixel_seq3_color_map[color.bytes.r];
         if (i == 6)
-            sequence = ws2812b_color_map[color.bytes.b];
+            sequence = neopixel_seq3_color_map[color.bytes.b];
 #if (NEOPIXEL_ENABLE_BIG_ENDIAN)
-        buffer[offset] = sequence[i % WS2812B_BYTES_PER_COLOR]; // using Big-endian, no need to swap bytes
+        buffer[offset] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // using Big-endian, no need to swap bytes
 #else
-        // buffer[offset] = __builtin_bswap32(sequence[i % WS2812B_BYTES_PER_COLOR]); // fill buffer in 16-bit Little-endian format
-        buffer[offset ^ 1] = sequence[i % WS2812B_BYTES_PER_COLOR]; // fill buffer in 16-bit Little-endian format
+        // buffer[offset] = __builtin_bswap32(sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]); // fill buffer in 16-bit Little-endian format
+        buffer[offset ^ 1] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // fill buffer in 16-bit Little-endian format
 #endif
     }
 }
@@ -737,14 +730,19 @@ static void setpixel_sk6812b(void *ctx, uint32_t index, const PixelColor color) 
     uint8_t *buffer = c->buffer;
     uint32_t offset = index * SK6812B_BYTES_PER_PIXEL;
 
-    const uint8_t *sequence = sk6812b_color_map[color.bytes.g];
+    const uint8_t *sequence = neopixel_seq3_color_map[color.bytes.g];
     for (int i = 0; i < SK6812B_BYTES_PER_PIXEL; ++i, ++offset) {
         if (i == 3)
-            sequence = sk6812b_color_map[color.bytes.r];
+            sequence = neopixel_seq3_color_map[color.bytes.r];
         if (i == 6)
-            sequence = sk6812b_color_map[color.bytes.b];
+            sequence = neopixel_seq3_color_map[color.bytes.b];
         if (i == 9)
-            sequence = sk6812b_color_map[color.bytes.w];
-        buffer[offset ^ 1] = sequence[i % SK6812B_BYTES_PER_COLOR]; // fill buffer in 16-bit little-endian format
+            sequence = neopixel_seq3_color_map[color.bytes.w];
+#if (NEOPIXEL_ENABLE_BIG_ENDIAN)
+        buffer[offset] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // using Big-endian, no need to swap bytes
+#else
+        // buffer[offset] = __builtin_bswap32(sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]); // fill buffer in 16-bit Little-endian format
+        buffer[offset ^ 1] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // fill buffer in 16-bit Little-endian format
+#endif
     }
 }
