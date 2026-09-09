@@ -6,11 +6,14 @@
 #include "neopixel_ring.h"
 
 #define TAG "RING"
-#if (31 == 0)
-#define DUMMY_PIXEL_COUNT 10
-#define PIXEL_COUNT (84 + DUMMY_PIXEL_COUNT) // 2 rings in series, 60+24
+
+#define NEOPIXEL_RGBW 1
+#if (NEOPIXEL_RGBW)
+#define PIXEL_COUNT (1 + 8 + 12 + 16 + 24 + 32 + 40 + 48 + 60) // 1 assembly 9 rings in total
+// #define PIXEL_COUNT (8 + 12 + 16 + 24 + 32 + 40 + 48 + 60) // test: 1 pixel less
 #else
-#define PIXEL_COUNT (60 + 24 + 93) // 2 rings in series: 60+24, 453 pixels with 3-bytes/color = 4093 bytes
+#define PIXEL_COUNT (60 + 24 + 1 + 8 + 12 + 16 + 24 + 32) // 1 ring of 60, 1 ring of 24, 1 assembly of 6 rings
+// #define PIXEL_COUNT (60 + 24 + 8 + 12 + 16 + 24 + 32) // test: 1 pixel less
 #endif
 
 #define I2S_TIMEOUT_TICKS 1000
@@ -21,6 +24,8 @@ static const PixelColor cyan = {.bytes = {0x28, 0x28, 0, 0}};
 static const PixelColor blue = {.bytes = {0x28, 0, 0, 0}}; // BGR(W), .bytesBGRW = ...
 static const PixelColor green = {.bytes = {0, 0x28, 0, 0}};
 static const PixelColor red = {.bytes = {0, 0, 0x10, 0}};
+
+static const PixelColor white = {.bytes = {0, 0, 0, 0x10}};
 
 static const PixelColor red32 = {.value = 0x280000}; // (W)RGB, .valueWRGB = ...
 static const PixelColor green32 = {.value = 0x002800};
@@ -50,7 +55,7 @@ bool startNeopixelRing(void) {
     }
 
     ESP_LOGI(TAG, "Initializing NeoPixel ring on pin=%d with %d pixels", dataPin, PIXEL_COUNT);
-#if (81 == 0)
+#if (NEOPIXEL_RGBW)
     npxContext = neopixel_Initialize(PIXEL_COUNT, dataPin, NEOPIXEL_MODE_SK6812B);
 #else
     npxContext = neopixel_Initialize(PIXEL_COUNT, dataPin, NEOPIXEL_MODE_WS2812B);
@@ -89,16 +94,17 @@ bool startNeopixelRing(void) {
 }
 
 void allBlackNeopixelRing(void) { // for console command
+#if (92 == 92)
+    setAllSameColor(npxContext, blue);
+    neopixel_Show_wrapper(npxContext);
+#else
     allBlack(npxContext);
+#endif
 }
 
 void loopNeopixelRing(unsigned long currentMillis) {
     static int coloredIndex = 0;
-#if (31 == 0)
-    static int blackIndex = (PIXEL_COUNT - DUMMY_PIXEL_COUNT) - 1;
-#else
     static int blackIndex = PIXEL_COUNT - 1;
-#endif
     static int loopStartMillis = 0;
     static int maxMillisPerLoop = 0;
     // delay(100); //@@@TODO: remove
@@ -120,15 +126,15 @@ void loopNeopixelRing(unsigned long currentMillis) {
     // allBlack(npxContext);
 #endif
     neopixel_SetColor(npxContext, blackIndex, black); // erase previously colored pixel
+#if (NEOPIXEL_RGBW)
+    neopixel_SetColor(npxContext, coloredIndex, white); // set new colored pixel
+#else
     neopixel_SetColor(npxContext, coloredIndex, red); // set new colored pixel
-    if (neopixel_Show_wrapper(npxContext)) {          // send the data to the Neopixel ring
+#endif
+    if (neopixel_Show_wrapper(npxContext)) { // send the data to the Neopixel ring
         // Update the pixel indexes for the next iteration
         blackIndex = coloredIndex;
-#if (31 == 0)
-        if (++coloredIndex >= (PIXEL_COUNT - DUMMY_PIXEL_COUNT)) { // New loop
-#else
         if (++coloredIndex >= PIXEL_COUNT) {
-#endif
             // New loop
             coloredIndex = 0;
 

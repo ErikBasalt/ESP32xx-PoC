@@ -26,6 +26,7 @@ typedef union UnionPixelColor {
 } PixelColor;
 
 typedef void (*pfnSetPixel)(void *c, uint32_t index, const PixelColor pixel);
+typedef void (*pfnSetAllSameColor)(void *c, const PixelColor pixel);
 
 struct neoPixelStatistics {
     uint32_t chunksSent;
@@ -54,6 +55,7 @@ typedef struct sNpContext {
     uint8_t *buffer;
     uint32_t bufferSize;
     pfnSetPixel setpixel;
+    pfnSetAllSameColor setAllSameColor;
     uint32_t bitrate;
 } tNpContext;
 
@@ -63,6 +65,27 @@ typedef enum {
     NEOPIXEL_MODE_WS2812B, /* RGB */
     NEOPIXEL_MODE_SK6812B, /* RGBW */
 } eNeopixelMode;
+
+class NeopixelDriver {
+  private:
+    size_t nrPixels;
+    gpio_num_t dout_pin;
+    size_t bytesPerPixel;
+    size_t bytesPerColor;
+    size_t colorsPerPixel; //@@@TODO: required?
+    uint8_t *buffer;
+    uint32_t bufferSize;
+
+  public:
+    NeopixelDriver(size_t nrPixels, gpio_num_t dout_pin, eNeopixelMode mode);
+    ~NeopixelDriver();
+    bool begin();
+    void setPixel(const size_t index, const PixelColor color);
+    void _fillPixelRange(size_t startIndex, size_t nrPixelsInRange, const PixelColor color);
+    void setAllPixels(const PixelColor color);
+    void setPixelRange(size_t startIndex, size_t endIndex, const PixelColor color);
+    bool show();
+};
 
 /*! \brief Create a neopixel context
  * \param nrPixels Number of pixels
@@ -81,6 +104,10 @@ bool neopixel_Show_wrapper(tNeopixelContext ctx);
 
 #if (15 == 0)
 void neopixel_clear_buffer(tNeopixelContext ctx);
+#endif
+
+#if (92 == 92)
+void setAllSameColor(tNeopixelContext ctx, const PixelColor color);
 #endif
 
 /*! \brief Get minimum number of ticks between neopixel_SetPixel calls

@@ -88,6 +88,9 @@ static bool i2s_tx_queue_overflow_callback(i2s_chan_handle_t handle, i2s_event_d
 static void setpixel_ws2812b(void *c, uint32_t index, const PixelColor color);
 static void setpixel_sk6812b(void *c, uint32_t index, const PixelColor color);
 
+static void setAllSameColor_ws2812b(tNeopixelContext ctx, const PixelColor color);
+static void setAllSameColor_sk6812b(tNeopixelContext ctx, const PixelColor color);
+
 /* -------------------------------------------------------------------------------------------------------------
  * Exported Functions
  */
@@ -203,11 +206,13 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
         c->bufferSize = (c->nrPixels * WS2812B_BYTES_PER_PIXEL) + WS2812B_RESET_BYTES;
 #endif
         c->setpixel = setpixel_ws2812b;
+        c->setAllSameColor = setAllSameColor_ws2812b;
         break;
     case NEOPIXEL_MODE_SK6812B:
         c->bitrate = SK6812B_BITRATE;
         c->bufferSize = (c->nrPixels * SK6812B_BYTES_PER_PIXEL) + SK6812B_RESET_BYTES;
         c->setpixel = setpixel_sk6812b;
+        c->setAllSameColor = setAllSameColor_sk6812b;
         break;
     default:
         ESP_LOGE(TAG, "Invalid mode (%d)", mode);
@@ -746,3 +751,135 @@ static void setpixel_sk6812b(void *ctx, uint32_t index, const PixelColor color) 
 #endif
     }
 }
+
+#if (93 == 93)
+static void setAllSameColor_ws2812b(tNeopixelContext ctx, const PixelColor color) {
+    tNpContext *c = (tNpContext *)ctx;
+
+    //@@@TODO: make universal, by storing WS2812B_BYTES_PER_PIXEL in context, and use c->setpixel() instead of setpixel_ws2812b()
+
+    // Fill the first 2 pixels with the color
+    // Must be 2 pixels, because the buffer can be filled in 16-bit little-endian format, so different for odd and even neopixels
+    setpixel_ws2812b(c, 0, color);
+    if (c->nrPixels > 1) {
+        setpixel_ws2812b(c, 1, color);
+        size_t copiedBytes = WS2812B_BYTES_PER_PIXEL * 2;
+        size_t restBytes = (c->nrPixels * WS2812B_BYTES_PER_PIXEL) - copiedBytes;
+
+        // Fill the rest of the buffer with copies of the first 2 pixels
+        // In each iteration increase the copy size by a factor of 2, until it does not fit anymore
+        while (copiedBytes <= restBytes) {
+            memcpy(&c->buffer[copiedBytes], c->buffer, copiedBytes);
+            restBytes -= copiedBytes;
+            copiedBytes *= 2;
+        }
+
+        // Next copy the remaining bytes (not a power of 2)
+        if (restBytes > 0) {
+            memcpy(&c->buffer[copiedBytes], c->buffer, restBytes);
+        }
+    }
+}
+
+static void setAllSameColor_sk6812b(tNeopixelContext ctx, const PixelColor color) {
+    tNpContext *c = (tNpContext *)ctx;
+
+    //@@@TODO: make universal, by storing SK6812B_BYTES_PER_PIXEL in context, and use c->setpixel() instead of setpixel_ws2812b()
+
+    // Fill the first 2 pixels with the color
+    // Must be 2 pixels, because the buffer can be filled in 16-bit little-endian format, so different for odd and even neopixels
+    setpixel_sk6812b(c, 0, color);
+    if (c->nrPixels > 1) {
+        setpixel_sk6812b(c, 1, color);
+        size_t copiedBytes = SK6812B_BYTES_PER_PIXEL * 2;
+        size_t restBytes = (c->nrPixels * SK6812B_BYTES_PER_PIXEL) - copiedBytes;
+
+        // Fill the rest of the buffer with copies of the first 2 pixels
+        // In each iteration increase the copy size by a factor of 2, until it does not fit anymore
+        while (copiedBytes <= restBytes) {
+            memcpy(&c->buffer[copiedBytes], c->buffer, copiedBytes);
+            restBytes -= copiedBytes;
+            copiedBytes *= 2;
+        }
+
+        // Next copy the remaining bytes (not a power of 2)
+        if (restBytes > 0) {
+            memcpy(&c->buffer[copiedBytes], c->buffer, restBytes);
+        }
+    }
+}
+
+void setAllSameColor(tNeopixelContext ctx, const PixelColor color) {
+    tNpContext *c = (tNpContext *)ctx;
+    c->setAllSameColor(c, color);
+}
+
+#else
+void NeopixelDriver::_fillPixelRange(size_t startIndex, size_t nrPixelsInRange, const PixelColor color) {
+    setPixel(startIndex, color);
+    if (nrPixelsInRange > 1) {
+        setPixel(startIndex + 1, color);
+
+        size_t copiedBytes = bytesPerPixel * 2;
+        size_t restBytes = (nrPixelsInRange * bytesPerPixel) - copiedBytes;
+        auto startBufferRange = &buffer[startIndex * bytesPerPixel];
+
+        while (restBytes >= copiedBytes) {
+            memcpy(&startBufferRange[copiedBytes], startBufferRange, copiedBytes);
+            restBytes -= copiedBytes;
+            copiedBytes *= 2;
+        }
+
+        if (restBytes > 0) {
+            memcpy(&startBufferRange[copiedBytes], startBufferRange, restBytes);
+        }
+    }
+}
+
+#if (90 == 90)
+void NeopixelDriver::setAllPixels(const PixelColor color) {
+    _fillPixelRange(0, nrPixels, color);
+}
+#else
+void NeopixelDriver::setAllPixels(const PixelColor color) {
+    // Fill the first 2 pixels with the color
+    // Must be 2 pixels, because the buffer can be filled in 16-bit little-endian format, so different for odd and even Neopixels
+    setPixel(0, color);
+    if (nrPixels > 1) {
+        setPixel(1, color);
+        size_t copiedBytes = bytesPerPixel * 2;
+        size_t restBytes = (nrPixels * bytesPerPixel) - copiedBytes;
+
+        // Fill the rest of the buffer with copies of the first 2 pixels
+        // In each iteration increase the copy size by a factor of 2, until it does not fit anymore
+        while (restBytes >= copiedBytes) {
+            // Append whole buffer to itself, doubling the size each time
+            memcpy(&buffer[copiedBytes], buffer, copiedBytes);
+            restBytes -= copiedBytes;
+            copiedBytes *= 2;
+        }
+
+        // Next copy the remaining bytes (not a power of 2)
+        if (restBytes > 0) {
+            memcpy(&buffer[copiedBytes], buffer, restBytes);
+        }
+    }
+}
+#endif
+
+void NeopixelDriver::setPixelRange(size_t startIndex, size_t endIndex, const PixelColor color) {
+    if (startIndex > endIndex) {
+        // Swap the Start and End if they are in the wrong order
+        auto tmpIndex = startIndex;
+        startIndex = endIndex;
+        endIndex = tmpIndex;
+    }
+
+    // Protect against invalid Start or End
+    if ((startIndex >= nrPixels) || (endIndex >= nrPixels)) {
+        return;
+    }
+
+    _fillPixelRange(startIndex, (endIndex - startIndex + 1), color);
+}
+#endif
