@@ -1,7 +1,11 @@
-/* \copyright 2023-2026 Zorxx Software. All rights reserved.
- * \license This file is released under the MIT License. See the LICENSE file for details.
- * \brief ESP32 Neopixel Driver
- */
+/*
+***************************************************************************************************
+    ESP32xx Neopixel Driver
+
+    Copyright (c) 2026 Erik Basalt
+    Released under the MIT License, see the LICENSE file for details.
+***************************************************************************************************
+*/
 #include <esp_system.h>
 #include <esp_log.h>
 
@@ -28,8 +32,17 @@
 
 #define TAG "NPIX"
 
+#if (150 == 150)
+// Minimum and maximum size of one single DMA buffer
+// Ensure yourself that calculated MIN and MAX values are integers (no fractions)
+static const size_t BYTES_PER_I2S_FRAME = 4;                                 // 1 frame = 4 bytes (16-bit stereo)
+static const uint32_t MIN_FRAMES_PER_DMA_CHUNK = 32 / BYTES_PER_I2S_FRAME;   // 8 frames, too small will make driver unstable
+static const uint32_t MAX_FRAMES_PER_DMA_CHUNK = 4000 / BYTES_PER_I2S_FRAME; // 1000 frames, limited by ESP32 DMA hardware (absolute max is 4032 for newer ESP32xx types)
+static const size_t DUMMY_FLUSH_BYTES = MIN_FRAMES_PER_DMA_CHUNK * BYTES_PER_I2S_FRAME;
+#else
 #define NEOPIXEL_MIN_DMA_BUFFER_SIZE 32   // 16 is too small
 #define NEOPIXEL_MAX_DMA_BUFFER_SIZE 4032 // max for newer ESP32xx chips (original ESP32 can go upto 4092)
+#endif
 
 #define I2S_TIMEOUT_TICKS 1000
 #define NEOPIXEL_TASK_PRIORITY (configMAX_PRIORITIES - 1)
@@ -100,44 +113,36 @@ static void setpixel_sk6812b(void *c, uint32_t index, const PixelColor color);
 static void setAllSameColor_ws2812b(tNeopixelContext ctx, const PixelColor color);
 static void setAllSameColor_sk6812b(tNeopixelContext ctx, const PixelColor color);
 
-static const size_t NEOPIXEL_BYTES_PER_FRAME = 4; // 1 frame = 4 bytes (16-bit stereo)
-
 /*
 ---------------------------------------------------------------------------------------------------
     Set the DMA configuration for the I2S peripheral to properly handle Neopixel data:
     - Adjust the Neopixel buffer size to match the actual number of bytes to be transmitted
-    - Configure the DMA channel with the appropriate number of DMA buffers and frames per buffer
-    - Ensure DMA buffer(s) contain complete frames of Neopixel data
-    - Prevent I2S driver from repeating the last DMA buffer
+    - Configure the DMA channel with the appropriate number of DMA chunks and frames per chunk
+    - Ensure DMA chunk(s) contain complete frames (no fractions) of Neopixel data
+    - Prevent I2S driver from repeating the last DMA chunk
 ---------------------------------------------------------------------------------------------------
 */
-void setDMAconfig(uint32_t &neopixelBufferSize, // [bytes]. When called: just the neopixel data size. On return: adjusted to actual number of bytes to be transmitted with I2S.
-                  i2s_chan_config_t *cfg)       // DMA channel configuration to be set for the I2S peripheral
+static void setDMAconfig(uint32_t &neopixelBufferSize, // [bytes]. When called: just the neopixel data size. On return: adjusted to actual number of bytes to be transmitted with I2S.
+                         i2s_chan_config_t *cfg)       // DMA channel configuration to be set for the I2S peripheral
 {
-    // Minimum and maximum size of one single DMA buffer
-    const uint32_t MIN_FRAMES_PER_DMA_CHUNK = 32 / NEOPIXEL_BYTES_PER_FRAME;   // 8 frames, too small will make driver unstable
-    const uint32_t MAX_FRAMES_PER_DMA_CHUNK = 4000 / NEOPIXEL_BYTES_PER_FRAME; // 1000 frames, limited by ESP32 DMA hardware (absolute max is 4032 for newer ESP32xx types)
+    // Required number of frames to contain all the Neopixel data (rounded up)
+    uint32_t totalNrFrames = (neopixelBufferSize + BYTES_PER_I2S_FRAME - 1) / BYTES_PER_I2S_FRAME;
 
-    // Required number of frames for Neopixel data (rounded up)
-    uint32_t totalNrFrames = (neopixelBufferSize + NEOPIXEL_BYTES_PER_FRAME - 1) / NEOPIXEL_BYTES_PER_FRAME;
-
-    // Required number of DMA buffers for Neopixel data (rounded up)
+    // Required number of DMA chunks for sending Neopixel data (rounded up)
     uint32_t nrChunks = (totalNrFrames + MAX_FRAMES_PER_DMA_CHUNK - 1) / MAX_FRAMES_PER_DMA_CHUNK;
 
-    // Required frames in one single DMA buffer (rounded up)
+    // Required number of frames in one single DMA chunk (rounded up)
     uint32_t nrFramesPerChunk = (totalNrFrames + nrChunks - 1) / nrChunks;
     if (nrFramesPerChunk < MIN_FRAMES_PER_DMA_CHUNK) {
         nrFramesPerChunk = MIN_FRAMES_PER_DMA_CHUNK;
     }
 
-    // 6. Verander neopixelBufferSize naar werkelijk aantal te verzenden bytes (kan meer zijn door 4-byte alignment en meerdere DMA buffers)
-    // Hierdoor worden alle DMA buffers helemaal gevuld, nullen voor restant
-    // Data flush wordt daardoor gegarandeerd in aparte DMA buffer gedaan
-
     // Adjust the Neopixel neopixelBufferSize to the actual number of bytes to be transmitted
-    // (this may be more due to 4-byte alignment and multiple DMA buffers)
-    neopixelBufferSize = nrChunks * nrFramesPerChunk * NEOPIXEL_BYTES_PER_FRAME;
+    // (adjusted size can be more than just the neopixel data, due to 4-byte alignment and multiple DMA buffers)
+    // This will ensure that the Data Flush is done in a separate DMA chunk.
+    neopixelBufferSize = nrChunks * nrFramesPerChunk * BYTES_PER_I2S_FRAME;
 
+    // Configure the DMA channel
     cfg->dma_desc_num = nrChunks + 1; // always 1 more than needed for Neopixel data only
     cfg->dma_frame_num = nrFramesPerChunk;
     cfg->auto_clear_before_cb = true; // prevent the I2S driver from repeating the last DMA buffer once it has been sent (and before the channel is really disabled)
@@ -160,7 +165,10 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
 #else
 // Just use the default DMA config
 #endif
+#if (151 == 0)
+    // Std config, will not be used, no need to show
     ESP_LOGI(TAG, "DMA buffers=%d, per buffer I2S frames=%d, total DMA bytes=%d", chan_cfg.dma_desc_num, chan_cfg.dma_frame_num, (2 * chan_cfg.dma_desc_num * chan_cfg.dma_frame_num));
+#endif
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(0), // rate is configured later
 #if (0 == 25)
@@ -369,17 +377,18 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
 ///////////////
 #endif
 
-    ESP_LOGI(TAG, "ADJUSTED: buffer size=%d bytes, frames/chunk=%d, frameSize=%d, DMA chunks=%d", c->bufferSize, chan_cfg.dma_frame_num, NEOPIXEL_BYTES_PER_FRAME, chan_cfg.dma_desc_num);
+    ESP_LOGI(TAG, "ADJUSTED: buffer size=%d bytes, frames/chunk=%d, bytes/frame=%d, DMA chunks=%d", c->bufferSize, chan_cfg.dma_frame_num, BYTES_PER_I2S_FRAME, chan_cfg.dma_desc_num);
 
 #if (0 == 16)
     std_cfg.clk_cfg.sample_rate_hz = 78125; //@@@TODO: hierdoor ineens dips in de amplitude van het data signaal (PXD) !?
 #elif (60 == 60)
-    std_cfg.clk_cfg.sample_rate_hz = c->bitrate / (NEOPIXEL_BYTES_PER_FRAME * 8); // frames per sec
+    std_cfg.clk_cfg.sample_rate_hz = c->bitrate / (BYTES_PER_I2S_FRAME * 8); // frames per sec
 #else
     std_cfg.clk_cfg.sample_rate_hz = c->bitrate / 16 / 2; // lahirunirmalx: 93750
 #endif
 
     ESP_LOGI(TAG, "I2S sample rate=%d frames/sec", std_cfg.clk_cfg.sample_rate_hz);
+    ESP_LOGI(TAG, "Raw I2S data transmit microseconds=%lld", (int64_t)(chan_cfg.dma_frame_num * chan_cfg.dma_desc_num) * 1000000 / std_cfg.clk_cfg.sample_rate_hz);
 #if (ENABLE_I2S_TASK_VERSION)
     portMUX_INITIALIZE(&c->lock);
 
@@ -532,9 +541,14 @@ bool neopixel_Show_noTask(tNeopixelContext ctx) { // Did NOT get it to work so f
             ESP_LOGE(TAG, "i2s_channel_preload_data() incomplete: bytesLoaded=%d", bytesLoaded);
         }
 #if (111 == 111)
-        // Add dummy DMA buffer, that can be retransmitted without any harm while the I2S channel is finalising
-        // 4 bytes seem to be working already, using NEOPIXEL_MIN_DMA_BUFFER_SIZE to be sure
+// Add dummy DMA chunk, that can be retransmitted without any harm while the I2S channel is finalising
+// 4 bytes seem to be working already, using NEOPIXEL_MIN_DMA_BUFFER_SIZE to be sure
+// I2S driver will pad the DMA chunk with zeros if necessary
+#if (150 == 150)
+        static uint8_t dummy_flush[DUMMY_FLUSH_BYTES];
+#else
         static uint8_t dummy_flush[NEOPIXEL_MIN_DMA_BUFFER_SIZE];
+#endif
         memset(dummy_flush, 0, sizeof(dummy_flush));
 
         rv = i2s_channel_preload_data(c->i2s, dummy_flush, sizeof(dummy_flush), &bytesLoaded);
