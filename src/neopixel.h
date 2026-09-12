@@ -9,6 +9,9 @@
 #include <driver/i2s_std.h>
 #include <driver/i2s_common.h>
 
+// Enable or disable output at every write to the Neopixels for better scope triggering (using Channel 2)
+#define NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE 1
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -31,6 +34,7 @@ typedef void (*pfnSetAllSameColor)(void *c, const PixelColor pixel);
 struct neoPixelStatistics {
     uint32_t chunksSent;
     uint32_t maxChunksSent;
+    uint32_t sentBytestAtMaxChunksSent;
     uint32_t overflowCount;
     uint32_t taskOverrunCount;
     uint32_t writeTimeoutCount;
@@ -54,6 +58,7 @@ typedef struct sNpContext {
 
     uint8_t *buffer;
     uint32_t bufferSize;
+    uint32_t totalNrChunks; // total number of DMA chunks (descriptors) for the complete Neopixel data transmission (incl data flush)
     pfnSetPixel setpixel;
     pfnSetAllSameColor setAllSameColor;
     uint32_t bitrate;
