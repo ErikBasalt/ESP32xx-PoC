@@ -24,35 +24,34 @@ struct StructPixelColor {
 };
 
 typedef union UnionPixelColor {
-    struct StructPixelColor bytes; // set as BGR(W), eg: PixelColor dimRed = {.bytes = {0, 0, 0x28, 0}};
+    struct StructPixelColor color; // set as BGR(W), eg: PixelColor dimRed = {.color = {0, 0, 0x28, 0}};
     uint32_t value;                // set as 0x(W)RGB, eg: PixelColor dimRed = {.value = 0x280000};
 } PixelColor;
+
+// Primary colors at full brigntness
+inline constexpr PixelColor neopixelBlack = {.color = {.b = 0, .g = 0, .r = 0, .w = 0}};
+inline constexpr PixelColor neopixelWhite_RGB = {.color = {.b = 0xff, .g = 0xff, .r = 0xff, .w = 0}};
+inline constexpr PixelColor neopixelWhite_RGBW = {.color = {.b = 0, .g = 0, .r = 0, .w = 0xff}};
+inline constexpr PixelColor neopixelRed = {.color = {.b = 0, .g = 0, .r = 0xff, .w = 0}};
+inline constexpr PixelColor neopixelGreen = {.color = {.b = 0, .g = 0xff, .r = 0, .w = 0}};
+inline constexpr PixelColor neopixelBlue = {.color = {.b = 0xff, .g = 0, .r = 0, .w = 0}};
+inline constexpr PixelColor neopixelCyan = {.color = {.b = 0xff, .g = 0xff, .r = 0, .w = 0}};
+inline constexpr PixelColor neopixelMagenta = {.color = {.b = 0xff, .g = 0, .r = 0xff, .w = 0}};
+inline constexpr PixelColor neopixelYellow = {.color = {.b = 0, .g = 0xff, .r = 0xff, .w = 0}};
 
 typedef void (*pfnSetPixel)(void *c, uint32_t index, const PixelColor pixel);
 typedef void (*pfnSetAllSameColor)(void *c, const PixelColor pixel);
 
 struct neoPixelStatistics {
-    uint32_t chunksSent;
+    uint32_t chunksSent; //@@@TODO: not only statistical, but also required to track actual DMA progress -> move to tNpContext
     uint32_t maxChunksSent;
     uint32_t sentBytestAtMaxChunksSent;
-    uint32_t overflowCount;
-    uint32_t taskOverrunCount;
-    uint32_t writeTimeoutCount;
-    uint32_t writeInvalidArgCount;
-    uint32_t writeInvalidStateCount;
-    uint32_t writeOtherErrorCount;
-    size_t bytesWritten[10];
-    uint32_t newDataCounter;
 };
 
 typedef struct sNpContext {
-    portMUX_TYPE lock;
-    SemaphoreHandle_t newData;  // new data is available to be sent to the Neopixels
     SemaphoreHandle_t dataSent; // all data has been sent to the Neopixels, but not fully ready for new data yet
-    SemaphoreHandle_t isReady;  // ready to send new data to the Neopixels
     i2s_chan_handle_t i2s;
     uint32_t nrPixels;
-    bool terminate;
     uint32_t bytesSent;              // to keep track of DMA progress
     struct neoPixelStatistics stats; // statistics for debugging and performance monitoring only
 
@@ -76,8 +75,6 @@ class NeopixelDriver {
     size_t nrPixels;
     gpio_num_t dout_pin;
     size_t bytesPerPixel;
-    size_t bytesPerColor;
-    size_t colorsPerPixel; //@@@TODO: required?
     uint8_t *buffer;
     uint32_t bufferSize;
 
@@ -103,27 +100,8 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
 
 void neopixel_SetColor(tNeopixelContext ctx, uint32_t index, const PixelColor pixel);
 bool neopixel_Show(tNeopixelContext ctx);
-bool neopixel_ShowNoWait(tNeopixelContext ctx);
-bool neopixel_Show_noTask(tNeopixelContext ctx);
-bool neopixel_Show_wrapper(tNeopixelContext ctx);
 
-#if (15 == 0)
-void neopixel_clear_buffer(tNeopixelContext ctx);
-#endif
-
-#if (92 == 92)
 void setAllSameColor(tNeopixelContext ctx, const PixelColor color);
-#endif
-
-/*! \brief Get minimum number of ticks between neopixel_SetPixel calls
- *  \param ctx Neopixel context received from successful neopixel_Init calls
- *  \returns Minimum number of ticks to wait between neopixel_SetPixel calls
- *           to ensure each neopixel_SetPixel call is displayed. If the time
- *           delta between neopixel_SetPixel calls is less than this, some
- *           neopixel_SetPixel data will simply not be displayed; no other
- *           ill-effects will result.
- */
-uint32_t neopixel_GetRefreshRate(tNeopixelContext ctx);
 
 /*! \brief Destroy an existing neopixel context and all associated resources
  *  \param ctx Neopixel context received from successful neopixel_Init calls

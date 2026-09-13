@@ -76,6 +76,13 @@ void showSystemInfo(void) {
     LOG_PRINTF("App build timestamp=`%s`\n", __DATE__ ", " __TIME__);
     LOG_PRINTF("Chip model=`%s`\n", ESP.getChipModel());
     LOG_PRINTF("Chip revision=%u\n", (unsigned)ESP.getChipRevision());
+#if (SOC_I2S_HW_VERSION_1)
+    LOG_PRINTF("I2S hardware version=1\n");
+#elif (SOC_I2S_HW_VERSION_2)
+    LOG_PRINTF("I2S hardware version=2\n");
+#else
+    LOG_PRINTF("I2S hardware version=??\n");
+#endif
     LOG_PRINTF("Number of cores=%u\n", (unsigned)ESP.getChipCores());
     LOG_PRINTF("RTOS tasks=%u\n", (unsigned)uxTaskGetNumberOfTasks());
     LOG_PRINTF("Max loop interval=%u ms\n", maxLoopIntervalMillis);

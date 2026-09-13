@@ -23,14 +23,6 @@
 */
 #define WS2812B_BITRATE (800000UL * NEOPIXEL_SEQ3_TXBITS_PER_COLORBIT) // Neopixel at 800kHz * 3 bits = 2.4 Mbps (417 ns/bit)
 
-//@@@TODO: newer (V5) WS2812B datasheet specifies the Reset period of at least 280 us, should this be supported here?
-//@@@TODO: ...or always have a 1ms wait period after each transmission? (ESP32 seens to need this delay anyway, to prevent skipping the last 13 pixels)
-//@@@TOSO: ...and then... if doing a 1ms delay anyway, can we simply skip the minor 50 us reset period?
-#if (100 == 0)
-#define WS2812B_RESET_MICROSECS 50                                                       // microseconds pause after each full Neopixel strip transmission
-#define WS2812B_RESET_BITS ((WS2812B_RESET_MICROSECS * WS2812B_BITRATE / 1000000UL) + 1) // same, converted to zero bits to send
-#define WS2812B_RESET_BYTES ((WS2812B_RESET_BITS + 7) / 8)                               // same, converted to zero bytes to send
-#endif
 #define WS2812B_COLORS_PER_PIXEL 3 // R. G and B
 #define WS2812B_BYTES_PER_PIXEL (NEOPIXEL_SEQ3_BYTES_PER_COLOR * WS2812B_COLORS_PER_PIXEL)
 
@@ -40,12 +32,6 @@
 -------------------------------------------------------------------------------
 */
 #define SK6812B_BITRATE (800000UL * NEOPIXEL_SEQ3_TXBITS_PER_COLORBIT) // Neopixel at 800kHz * 3 bits = 2.4 Mbps (417 ns/bit)
-
-#if (100 == 0)
-#define SK6812B_RESET_MICROSECS 80                                                       // microseconds pause after each full Neopixel strip transmission
-#define SK6812B_RESET_BITS ((SK6812B_RESET_MICROSECS * SK6812B_BITRATE / 1000000UL) + 1) // same, converted to zero bits to send
-#define SK6812B_RESET_BYTES ((SK6812B_RESET_BITS + 7) / 8)                               // same, converted to zero bytes to send
-#endif
 
 #define SK6812B_COLORS_PER_PIXEL 4 // R, G, B and W
 #define SK6812B_BYTES_PER_PIXEL (NEOPIXEL_SEQ3_BYTES_PER_COLOR * SK6812B_COLORS_PER_PIXEL)
