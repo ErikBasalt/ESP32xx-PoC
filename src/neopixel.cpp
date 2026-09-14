@@ -27,7 +27,7 @@ static const uint32_t MIN_FRAMES_PER_DMA_CHUNK = 32 / BYTES_PER_I2S_FRAME;   // 
 static const uint32_t MAX_FRAMES_PER_DMA_CHUNK = 4000 / BYTES_PER_I2S_FRAME; // 1000 frames, limited by ESP32 DMA hardware (absolute max is 4032 for newer ESP32xx types)
 static const size_t DUMMY_FLUSH_BYTES = MIN_FRAMES_PER_DMA_CHUNK * BYTES_PER_I2S_FRAME;
 
-#define I2S_TIMEOUT_TICKS 1000
+static const uint32_t NEOPIXEL_I2S_TRANSMIT_TIMEOUT_MS = 1000;
 
 #if (SOC_I2S_HW_VERSION_1)
 // NOTE: !! VSC is not aware of this define, therefore syntax highlighting does NOT work here !!
@@ -48,9 +48,6 @@ static const size_t DUMMY_FLUSH_BYTES = MIN_FRAMES_PER_DMA_CHUNK * BYTES_PER_I2S
 #define NEOPIXEL_ENABLE_BIG_ENDIAN 1
 #endif
 
-// Statistical
-#define NEOPIXEL_MEASURE_MAX_WRITE_MICROS 1
-
 //@@@TODO: remove when using class implementation
 static void setpixel_ws2812b(void *c, uint32_t index, const PixelColor color);
 static void setpixel_sk6812b(void *c, uint32_t index, const PixelColor color);
@@ -61,24 +58,30 @@ static void setAllSameColor_sk6812b(tNeopixelContext ctx, const PixelColor color
 /*
 ---------------------------------------------------------------------------------------------------
     Interrupt callback for I2S transmission completion of one single DMA chunk
+
+    Per Neopixel transmission, two or more multiple DMA chunks are used:
+    - one (or more) for the raw Neopixel data
+    - one for the dummy flush with all zeros
 ---------------------------------------------------------------------------------------------------
 */
 static IRAM_ATTR bool i2s_tx_queue_sent_callback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *user_ctx) {
-    // Finished sending one (1) DMA buffer
+    // Finished sending one (1) DMA chunk
     tNpContext *c = (tNpContext *)user_ctx;
-    c->bytesSent += event->size;
-    c->stats.chunksSent++;
-    if (c->bytesSent >= c->bufferSize) {                    //@@@TODO: note that bufferSize is EXCLUDING the data flush chunk
-        if (c->stats.chunksSent > c->stats.maxChunksSent) { //@@@TODO: why only check here, when sent>=buffer?
-            c->stats.maxChunksSent = c->stats.chunksSent;
-            c->stats.sentBytestAtMaxChunksSent = c->bytesSent;
-        }
+
+    c->chunksSent++;
+    if (c->chunksSent > c->stats.maxChunksSent) {
+        // Sometimes the driver cannot stop immediately and repeats the last DMA chunk at the end of the transmission,
+        // leading to more chunks being sent than the raw Neopixel data requires
+        // Since the last chunk is the dummy flush with all zeros this does not hurt,
+        // this statistic only tracks the occurrence.
+        c->stats.maxChunksSent = c->chunksSent;
     }
 
-    if (c->stats.chunksSent == c->totalNrChunks) { //@@@TODO: decide on using chunks or bytesSent. Decide on exact match or ">="
+    if (c->chunksSent == c->totalNrChunks) {
+        // All Neopixel DMA chunks (incl dummy flush) have been sent, signal the waiting task it can continue now
         xSemaphoreGive(c->dataSent);
     }
-    return false; // no need for RTOS to check immediately for higher priority task
+    return (false); // no need for RTOS to check immediately for higher priority task
 }
 
 /*
@@ -87,7 +90,7 @@ static IRAM_ATTR bool i2s_tx_queue_sent_callback(i2s_chan_handle_t handle, i2s_e
     - Adjust the Neopixel buffer size to match the actual number of bytes to be transmitted
     - Configure the DMA channel with the appropriate number of DMA chunks and frames per chunk
     - Ensure DMA chunk(s) contain complete frames (no fractions) of Neopixel data
-    - Prevent I2S driver from repeating the last DMA chunk
+    - (try to) Prevent I2S driver from repeating the last DMA chunk, not sure if this always works
 ---------------------------------------------------------------------------------------------------
 */
 static void setDMAconfig(uint32_t &neopixelBufferSize, // [bytes]. When called: just the neopixel data size. On return: adjusted to actual number of bytes to be transmitted with I2S.
@@ -113,7 +116,7 @@ static void setDMAconfig(uint32_t &neopixelBufferSize, // [bytes]. When called: 
     // Configure the DMA channel
     cfg->dma_desc_num = nrChunks + 1; // always 1 more than needed for Neopixel data only
     cfg->dma_frame_num = nrFramesPerChunk;
-    cfg->auto_clear_before_cb = true; // prevent the I2S driver from repeating the last DMA buffer once it has been sent (and before the channel is really disabled)
+    cfg->auto_clear_before_cb = true; // (try to) prevent the I2S driver from repeating the last DMA buffer once it has been sent (and before the channel is really disabled)
 }
 
 /*
@@ -121,9 +124,13 @@ static void setDMAconfig(uint32_t &neopixelBufferSize, // [bytes]. When called: 
     Init the driver
 ===================================================================================================
 */
-tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNeopixelMode mode) {
-    tNpContext *c = NULL;
+tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dataPin, eNeopixelMode mode) {
+    tNpContext *c = nullptr;
+    uint32_t bitRate;
+    uint32_t bytesPerPixel;
+
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(0), // rate is configured later
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
@@ -131,7 +138,7 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
             .mclk = I2S_GPIO_UNUSED,
             .bclk = I2S_GPIO_UNUSED,
             .ws = I2S_GPIO_UNUSED,
-            .dout = dout_pin,
+            .dout = dataPin,
             .din = I2S_GPIO_UNUSED,
             .invert_flags = {
                 .mclk_inv = false,
@@ -149,17 +156,10 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
     ESP_LOGI(TAG, "Little-endian mode (ESP32, ESP32-S2)");
 #endif
 
-    i2s_event_callbacks_t callbacks = {
-        .on_recv = NULL,
-        .on_recv_q_ovf = NULL,
-        .on_sent = i2s_tx_queue_sent_callback,
-        .on_send_q_ovf = NULL,
-    };
-
     c = (tNpContext *)malloc(sizeof(*c)); //@@@TODO: replace context by class implementation
-    if (NULL == c) {
+    if (c == nullptr) {
         ESP_LOGE(TAG, "Failed to allocate context");
-        return NULL;
+        return (nullptr);
     }
     memset(c, 0, sizeof(*c));
 
@@ -167,58 +167,68 @@ tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dout_pin, eNe
 
     switch (mode) {
     case NEOPIXEL_MODE_WS2812B:
-        c->bitrate = WS2812B_BITRATE;
-        c->bufferSize = c->nrPixels * WS2812B_BYTES_PER_PIXEL;
+        bitRate = WS2812B_BITRATE;
+        bytesPerPixel = WS2812B_BYTES_PER_PIXEL;
         c->setpixel = setpixel_ws2812b;
         c->setAllSameColor = setAllSameColor_ws2812b;
         break;
     case NEOPIXEL_MODE_SK6812B:
-        c->bitrate = SK6812B_BITRATE;
-        c->bufferSize = c->nrPixels * SK6812B_BYTES_PER_PIXEL;
+        bitRate = SK6812B_BITRATE;
+        bytesPerPixel = SK6812B_BYTES_PER_PIXEL;
         c->setpixel = setpixel_sk6812b;
         c->setAllSameColor = setAllSameColor_sk6812b;
         break;
     default:
         ESP_LOGE(TAG, "Invalid mode (%d)", mode);
         free(c);
-        return NULL;
+        return (nullptr);
     }
 
-    ESP_LOGI(TAG, "nrPixels=%d, bit buffer size=%d bytes, bitrate=%d bps", c->nrPixels, c->bufferSize, c->bitrate);
+    // Calculate buffer and DMA sizes
+    c->bufferSize = c->nrPixels * bytesPerPixel;
+    ESP_LOGI(TAG, "nrPixels=%d, bytesPerPixel=%d, raw buffer size=%d bytes, bitRate=%d bps", c->nrPixels, bytesPerPixel, c->bufferSize, bitRate);
 
     setDMAconfig(c->bufferSize, &chan_cfg); // bufferSize called by reference, it can be increased
 
-    ESP_LOGI(TAG, "ADJUSTED: buffer size=%d bytes, frames/chunk=%d, bytes/frame=%d, DMA chunks=%d", c->bufferSize, chan_cfg.dma_frame_num, BYTES_PER_I2S_FRAME, chan_cfg.dma_desc_num);
+    ESP_LOGI(TAG, "Optimised buffer size=%d bytes, frames/chunk=%d, bytes/frame=%d, DMA chunks=%d", c->bufferSize, chan_cfg.dma_frame_num, BYTES_PER_I2S_FRAME, chan_cfg.dma_desc_num);
 
-    std_cfg.clk_cfg.sample_rate_hz = c->bitrate / (BYTES_PER_I2S_FRAME * 8); // frames per sec
+    c->totalNrChunks = chan_cfg.dma_desc_num;                               // to check in callback if all chunks have been sent
+    c->buffer = (uint8_t *)heap_caps_malloc(c->bufferSize, MALLOC_CAP_DMA); //@@@TODO: is DMA capability really needed?
+    memset(c->buffer, 0, c->bufferSize);                                    // esp. to ensure the unused bytes in last frame are zeroed
+
+    // Calculate speed
+    std_cfg.clk_cfg.sample_rate_hz = bitRate / (BYTES_PER_I2S_FRAME * 8); // frames per sec
 
     ESP_LOGI(TAG, "I2S sample rate=%d frames/sec", std_cfg.clk_cfg.sample_rate_hz);
     ESP_LOGI(TAG, "I2S data TX time=%lld us", (int64_t)(chan_cfg.dma_frame_num * chan_cfg.dma_desc_num) * 1000000 / std_cfg.clk_cfg.sample_rate_hz);
 
-    c->dataSent = xSemaphoreCreateBinary();
-    c->totalNrChunks = chan_cfg.dma_desc_num; // to check in callback if all chunks have been sent
+    // Housekeeping stuff
+    c->dataSent = xSemaphoreCreateBinary(); // to get notified when all DMA chunks data has been transmitted by I2S
+    c->stats = {};                          // reset all statistics to zero
 
-    c->bytesSent = 0; //@@@TODO: needed here?
-    c->stats = {};    // reset all statistics to zero
-
-    c->buffer = (uint8_t *)heap_caps_malloc(c->bufferSize, MALLOC_CAP_DMA); //@@@TODO: is DMA capability really needed?
-    memset(c->buffer, 0, c->bufferSize);                                    /* initialise the reset bytes to zero */
-
-    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &c->i2s, NULL)); /* Tx channel only (no Rx) */
+    // Let's go
+    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &c->i2s, nullptr)); // Create TX channel only (no RX)
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(c->i2s, &std_cfg));
-    ESP_ERROR_CHECK(i2s_channel_register_event_callback(c->i2s, &callbacks, c));
     ESP_LOGI(TAG, "I2S channel id=%d, interrupt priority=%d", chan_cfg.id, chan_cfg.intr_priority);
 
-    return (tNeopixelContext)c;
+    i2s_event_callbacks_t callbacks = {
+        .on_recv = nullptr,
+        .on_recv_q_ovf = nullptr,
+        .on_sent = i2s_tx_queue_sent_callback,
+        .on_send_q_ovf = nullptr,
+    };
+    ESP_ERROR_CHECK(i2s_channel_register_event_callback(c->i2s, &callbacks, c));
+
+    return ((tNeopixelContext)c);
 }
 
 void neopixel_Deinit(tNeopixelContext ctx) {
     tNpContext *c = (tNpContext *)ctx;
-    if (NULL == c)
+    if (c == nullptr)
         return;
 
     i2s_del_channel(c->i2s);
-    free(c->buffer);
+    heap_caps_free(c->buffer);
     free(c);
 }
 
@@ -231,7 +241,7 @@ void neopixel_SetColor(tNeopixelContext ctx, uint32_t index, const PixelColor co
     tNpContext *c = (tNpContext *)ctx;
 
     if (index < c->nrPixels) {
-        c->setpixel(c, index, color);
+        c->setpixel(c, index, color); // call Neopixel type specific function
     }
 }
 
@@ -242,23 +252,20 @@ void neopixel_SetColor(tNeopixelContext ctx, uint32_t index, const PixelColor co
 */
 #define NEOPIXEL_MINIMUM_INTERVAL_US (1000)
 
-bool neopixel_Show(tNeopixelContext ctx) { // Did NOT get it to work so far...
+bool neopixel_Show(tNeopixelContext ctx) {
 
     tNpContext *c = (tNpContext *)ctx;
-#if (NEOPIXEL_MEASURE_MAX_WRITE_MICROS)
-    static unsigned long maxWriteMicros = 0;
-    int64_t startMicros = esp_timer_get_time();
+
     static int64_t endMicros = 0 - NEOPIXEL_MINIMUM_INTERVAL_US;
-#endif
+    int64_t startMicros = esp_timer_get_time();
 
     if (startMicros < (endMicros + NEOPIXEL_MINIMUM_INTERVAL_US)) {
         // After Disable, the I2S driver needs some time to cleanup before the next data transfer
-        // Without this delay and driving just 1 neopixel at full speed, after some time esp32c3 will show extra green pixel and may even crash (RTC_SW_CPU_RST)
-        // Implicitly, this delay also ensures the Reset timing for neopixels (some types require >=280 us)
-        // ESP_LOGW(TAG, "startMicros is less than %d us after endMicros, delta=%lld", NEOPIXEL_MINIMUM_INTERVAL_US, endMicros - startMicros);
-        vTaskDelay(pdMS_TO_TICKS(1));
-        startMicros = esp_timer_get_time(); // don't measure the delay
-    }
+        // Without this delay and driving just 1 neopixel at full speed, after some time ESP32-C3 will show extra green pixel and may even crash (RTC_SW_CPU_RST)
+        // Implicitly, this delay also ensures the Reset timing for Neopixels (some types require >=280 us)
+        vTaskDelay(pdMS_TO_TICKS(1));       // 1 ms
+        startMicros = esp_timer_get_time(); // do not include this delay in the write timing calculation
+    } // else: sufficient time has passed since the previous end time
 
     size_t bytesLoaded = 0;
     esp_err_t rv = i2s_channel_preload_data(c->i2s, c->buffer, c->bufferSize, &bytesLoaded);
@@ -271,11 +278,10 @@ bool neopixel_Show(tNeopixelContext ctx) { // Did NOT get it to work so far...
             ESP_LOGE(TAG, "i2s_channel_preload_data() incomplete: bytesLoaded=%d", bytesLoaded);
         }
 
-        // Add dummy DMA chunk, that can be retransmitted without any harm while the I2S channel is finalising
-        // 4 bytes seem to be working already, using NEOPIXEL_MIN_DMA_BUFFER_SIZE to be sure
-        // I2S driver will pad the DMA chunk with zeros if necessary
-        static uint8_t dummy_flush[DUMMY_FLUSH_BYTES];
-        memset(dummy_flush, 0, sizeof(dummy_flush));
+        // Add dummy flush DMA chunk, that can be retransmitted without any harm while the I2S channel is finalising
+        // 1 frame of 4 bytes seem to be working already, using some more to be sure
+        // If necessary, the I2S driver will pad this DMA chunk with zeros to match the Neopixel chunk sizes
+        static const uint8_t dummy_flush[DUMMY_FLUSH_BYTES] = {}; // initialise with all zeros
 
         rv = i2s_channel_preload_data(c->i2s, dummy_flush, sizeof(dummy_flush), &bytesLoaded);
         if (rv != ESP_OK) {
@@ -289,8 +295,7 @@ bool neopixel_Show(tNeopixelContext ctx) { // Did NOT get it to work so far...
         }
     }
 
-    c->bytesSent = 0;
-    c->stats.chunksSent = 0;
+    c->chunksSent = 0;
 
 #if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE)
     hal.setNeoPixelEnable(true); // enable the data output
@@ -305,7 +310,7 @@ bool neopixel_Show(tNeopixelContext ctx) { // Did NOT get it to work so far...
         }
     }
 
-    if (xSemaphoreTake(c->dataSent, pdMS_TO_TICKS(1000)) != pdTRUE) { // wait until DMA transfer is complete
+    if (xSemaphoreTake(c->dataSent, pdMS_TO_TICKS(NEOPIXEL_I2S_TRANSMIT_TIMEOUT_MS)) != pdTRUE) { // wait until all DMA transfers are done
         // Never happens (mostly tested with 500ms)
         ESP_LOGE(TAG, "Timeout waiting for DMA transfer to complete");
     }
@@ -323,16 +328,14 @@ bool neopixel_Show(tNeopixelContext ctx) { // Did NOT get it to work so far...
     hal.setNeoPixelEnable(false); // enable the data output
 #endif
 
-#if (NEOPIXEL_MEASURE_MAX_WRITE_MICROS)
     endMicros = esp_timer_get_time();
-    auto writeMicros = endMicros - startMicros;
-    if (writeMicros > maxWriteMicros) {
-        maxWriteMicros = writeMicros;
-        ESP_LOGI(TAG, "maxWriteMicros=%lu", maxWriteMicros);
+    int64_t writeMicros = endMicros - startMicros;
+    if (writeMicros > c->stats.maxSendMicros) {
+        c->stats.maxSendMicros = writeMicros;
+        ESP_LOGI(TAG, "maxSendMicros=%lld", c->stats.maxSendMicros); //@@@TODO: remove, show statistics on request
     }
-#endif
 
-    return true; // @@@TODO: return value should indicate if the data has been sent or not, but for now always return true
+    return (true); // @@@TODO: return value should indicate if the data has been sent or not, but for now always return true
 }
 
 /*
@@ -350,7 +353,7 @@ static void setpixel_ws2812b(void *ctx, uint32_t index, const PixelColor pixel) 
         return;
     }
     const uint8_t *sequence = neopixel_seq3_color_map[pixel.color.g];
-    for (int i = 0; i < WS2812B_BYTES_PER_PIXEL; ++i, ++offset) {
+    for (int i = 0; i < WS2812B_BYTES_PER_PIXEL; ++i, ++offset) { //@@@TODO: consider replacing for-loop with written-out statements
         if (i == 3)
             sequence = neopixel_seq3_color_map[pixel.color.r];
         if (i == 6)

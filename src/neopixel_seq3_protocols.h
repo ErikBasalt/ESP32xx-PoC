@@ -11,8 +11,6 @@
     This file is released under the MIT License. See the LICENSE file for details.
 *****************************************************************************************
 */
-#include <stdint.h>
-
 #define NEOPIXEL_SEQ3_TXBITS_PER_COLORBIT 3                               // transmit 3 bits for each color bit, to closely match the 1/3 and 2/3 timing of the WS2812B protocol:
 #define NEOPIXEL_SEQ3_BYTES_PER_COLOR (NEOPIXEL_SEQ3_TXBITS_PER_COLORBIT) // same, now expressed as bytes
 

@@ -76,7 +76,7 @@ void statistics(unsigned long currentMillis, tNpContext *c) {
     static int reportedMaxChunksSent = 0;
     if (c->stats.maxChunksSent > reportedMaxChunksSent) {
         reportedMaxChunksSent = c->stats.maxChunksSent;
-        ESP_LOGI(TAG, "maxChunksSent=%d, sentBytestAtMaxChunksSent=%d", reportedMaxChunksSent, c->stats.sentBytestAtMaxChunksSent);
+        ESP_LOGI(TAG, "maxChunksSent=%d", reportedMaxChunksSent);
     }
 }
 
