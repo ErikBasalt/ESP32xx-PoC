@@ -23,7 +23,8 @@ extern "C" {
 typedef union alignas(uint32_t) UnionPixelColor {
     uint32_t value; // set as 0x(W)RGB, eg: PixelColor dimRed = {.value = 0x280000};
 
-    struct StructPixelColor { // set as BGR(W), eg: PixelColor dimRed = {.color = {0, 0, 0x28, 0}};
+    //@@@TODO: why not simply use RGB(W) or (W)RGB order?
+    struct StructPixelColor { // set as BGR(W), eg: PixelColor dimmedRed = {.color = {.b=0, .g=0, .r=0x10, .w=0}};
         uint8_t b;            // little-endian for whole ESP32xx family, do NOT change order of these bytes, otherwise the color will be wrong!
         uint8_t g;
         uint8_t r;
@@ -42,76 +43,103 @@ inline constexpr PixelColor neopixelCyan = {.color = {.b = 0xff, .g = 0xff, .r =
 inline constexpr PixelColor neopixelMagenta = {.color = {.b = 0xff, .g = 0, .r = 0xff, .w = 0}};
 inline constexpr PixelColor neopixelYellow = {.color = {.b = 0, .g = 0xff, .r = 0xff, .w = 0}};
 
-typedef void (*pfnSetPixel)(void *c, uint32_t index, const PixelColor pixel);
-typedef void (*pfnSetAllSameColor)(void *c, const PixelColor pixel);
-
-struct neoPixelStatistics {
-    int64_t maxSendMicros;
-    uint32_t maxChunksSent;
-    //@@@TODO: add some error counters (e.g., for DMA transfer failures)
-};
-
-typedef struct sNpContext {
-    SemaphoreHandle_t dataSent; // all data has been sent to the Neopixels, but not fully ready for new data yet
-    i2s_chan_handle_t i2s;
-
-    uint8_t *buffer;
-    uint32_t bufferSize;
-
-    uint32_t nrPixels;      // number of Neopixels to drive
-    uint32_t totalNrChunks; // total number of DMA chunks (descriptors) for the complete Neopixel data transmission (incl data flush)
-    uint32_t chunksSent;    // actual number of chunks (being) sent, used for tracking the transmit progress
-
-    pfnSetPixel setpixel;               // Neopixel type (eg for WS2812B) specific function to set one pixel
-    pfnSetAllSameColor setAllSameColor; // Neopixel type (eg for WS2812B) specific function to set all pixels to the same color
-
-    struct neoPixelStatistics stats; // statistics for debugging and performance monitoring only
-} tNpContext;
-
-typedef void *tNeopixelContext;
-
 typedef enum {
-    NEOPIXEL_MODE_WS2812B, /* RGB */
-    NEOPIXEL_MODE_SK6812B, /* RGBW */
+    NEOPIXEL_MODE_WS2812B, // RGB
+    NEOPIXEL_MODE_SK6812B, // RGBW
 } eNeopixelMode;
 
 class NeopixelDriver {
   private:
-    size_t nrPixels;
-    gpio_num_t dataPin;
-    size_t bytesPerPixel;
-    uint8_t *buffer;
-    uint32_t bufferSize;
+    i2s_chan_handle_t i2s; // the I2S channel handle in use (ESP32 and ESP32-S2 have 2 channels)
+
+    uint8_t *buffer = nullptr; // data buffer to be sent to the Neopixels
+    size_t bufferSize;         // [bytes]
+
+    size_t nrPixels;      // number of Neopixels to drive
+    size_t bytesPerPixel; // number of bytes per pixel based on the Neopixel type (eg: 3 for WS2812B, 4 for SK6812B)
+
+    SemaphoreHandle_t allSentSemaphore; // all chunks have been sent to the Neopixels
+    int totalNrChunks;                  // total number of DMA chunks (descriptors) for the complete Neopixel data transmission (incl data flush)
+    int sentNrChunks;                   // actual number of chunks (being) sent, used for tracking the transmit progress
+
+    static bool onSentCallback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *classContext); // in cpp
+
+    void _setPixel_ws2812b(const size_t index, const PixelColor color);                     // in cpp
+    void _setPixel_sk6812b(const size_t index, const PixelColor color);                     // in cpp
+    void (NeopixelDriver::*_selected_setPixel)(const size_t index, const PixelColor color); // set by begin() to one _setPixel_<name> function based on the Neopixel type
+
+    void _fillPixelRange(size_t startIndex, size_t nrPixelsInRange, const PixelColor color) {
+        setPixel(startIndex, color);
+        if (nrPixelsInRange > 1) {
+            setPixel(startIndex + 1, color); // use setPixel for first two pixels, to avoid issue with odd number of bytesPerPixel and little-endian byte order
+
+            size_t copiedBytes = bytesPerPixel * 2;
+            size_t restBytes = (nrPixelsInRange * bytesPerPixel) - copiedBytes;
+            auto startBufferRange = &buffer[startIndex * bytesPerPixel];
+
+            while (restBytes >= copiedBytes) {
+                memcpy(&startBufferRange[copiedBytes], startBufferRange, copiedBytes);
+                restBytes -= copiedBytes;
+                copiedBytes *= 2;
+            }
+
+            if (restBytes > 0) {
+                memcpy(&startBufferRange[copiedBytes], startBufferRange, restBytes);
+            }
+        } // else: just one (1) Neopixel in the range
+    }
 
   public:
-    NeopixelDriver(size_t nrPixels, gpio_num_t dataPin, eNeopixelMode mode);
-    ~NeopixelDriver();
-    bool begin();
-    void setPixel(const size_t index, const PixelColor color);
-    void _fillPixelRange(size_t startIndex, size_t nrPixelsInRange, const PixelColor color);
-    void setAllPixels(const PixelColor color);
-    void setPixelRange(size_t startIndex, size_t endIndex, const PixelColor color);
-    bool show();
+    struct NeopixelStatistics {
+        int64_t maxSendMicros;
+        uint32_t maxNrChunksSent;
+        //@@@TODO: add some error counters (e.g., for DMA transfer failures)
+    } stats;
+
+    NeopixelDriver(void) {} // empty, use begin() to initialize the driver
+
+    ~NeopixelDriver(void) {
+        //@@@TODO: add delay?
+        i2s_del_channel(i2s);
+        if (buffer != nullptr) {
+#if (200 == 200)
+            free(buffer);
+#else
+            heap_caps_free(buffer);
+#endif
+        }
+    }
+
+    bool begin(const size_t nrPixels, const gpio_num_t dataPin, const eNeopixelMode mode); // in cpp
+    bool show(void);                                                                       // in cpp
+
+    void setPixel(const size_t index, const PixelColor color) {
+        if (index >= nrPixels) {
+            return;
+        }
+        (this->*_selected_setPixel)(index, color); // call the selected Neopixel type specific function
+    }
+
+    void setAllPixels(const PixelColor color) {
+        _fillPixelRange(0, nrPixels, color);
+    }
+
+    void setPixelRange(size_t startIndex, size_t endIndex, const PixelColor color) {
+        if (startIndex > endIndex) {
+            // Swap the Start and End if they are in the wrong order
+            auto tmpIndex = startIndex;
+            startIndex = endIndex;
+            endIndex = tmpIndex;
+        }
+
+        // Protect against invalid Start or End
+        if ((startIndex >= nrPixels) || (endIndex >= nrPixels)) {
+            return;
+        }
+
+        _fillPixelRange(startIndex, (endIndex - startIndex + 1), color);
+    }
 };
-
-/*! \brief Create a neopixel context
- * \param nrPixels Number of pixels
- * \param dataPin Physical pin to send neopixel data (e.g. GPIO_NUM_27)
- * \param mode Neopixel mode (one of NEOPIXEL_MODE_*)
- * \returns Pointer to neopixel context, used as the first parameter
- *          to subsequent neopixel function calls
- */
-tNeopixelContext neopixel_Initialize(uint32_t nrPixels, gpio_num_t dataPin, eNeopixelMode mode);
-
-void neopixel_SetColor(tNeopixelContext ctx, uint32_t index, const PixelColor pixel);
-bool neopixel_Show(tNeopixelContext ctx);
-
-void setAllSameColor(tNeopixelContext ctx, const PixelColor color);
-
-/*! \brief Destroy an existing neopixel context and all associated resources
- *  \param ctx Neopixel context received from successful neopixel_Init calls
- */
-void neopixel_Deinit(tNeopixelContext ctx);
 
 #ifdef __cplusplus
 }
