@@ -1,8 +1,7 @@
 #pragma once
 /*
 *****************************************************************************************
-    Protocol details for both WS2812B (RGB) and SK6812B (RGBW),
-    using 3 transmit bits ("seq3") per color bit.
+    Bitstream sequence for Neopixels that use 3 transmit bits ("seq3") per color bit.
 
     Based on ws2812b_protocol.h and sk6812b_protocol.h from Zorxx Software,
     https://github.com/zorxx/neopixel, copyright 2023-2026, MIT License.
@@ -11,28 +10,8 @@
     This file is released under the MIT License. See the LICENSE file for details.
 *****************************************************************************************
 */
-#define NEOPIXEL_SEQ3_TXBITS_PER_COLORBIT 3                               // transmit 3 bits for each color bit, to closely match the 1/3 and 2/3 timing of the WS2812B protocol:
-#define NEOPIXEL_SEQ3_BYTES_PER_COLOR (NEOPIXEL_SEQ3_TXBITS_PER_COLORBIT) // same, now expressed as bytes
-
-/*
--------------------------------------------------------------------------------
-    WS2812B specific (RGB)
--------------------------------------------------------------------------------
-*/
-#define WS2812B_BITRATE (800000UL * NEOPIXEL_SEQ3_TXBITS_PER_COLORBIT) // Neopixel at 800kHz * 3 bits = 2.4 Mbps (417 ns/bit)
-
-#define WS2812B_COLORS_PER_PIXEL 3 // R. G and B
-#define WS2812B_BYTES_PER_PIXEL (NEOPIXEL_SEQ3_BYTES_PER_COLOR * WS2812B_COLORS_PER_PIXEL)
-
-/*
--------------------------------------------------------------------------------
-    SK6812B specific (WRGB)
--------------------------------------------------------------------------------
-*/
-#define SK6812B_BITRATE (800000UL * NEOPIXEL_SEQ3_TXBITS_PER_COLORBIT) // Neopixel at 800kHz * 3 bits = 2.4 Mbps (417 ns/bit)
-
-#define SK6812B_COLORS_PER_PIXEL 4 // R, G, B and W
-#define SK6812B_BYTES_PER_PIXEL (NEOPIXEL_SEQ3_BYTES_PER_COLOR * SK6812B_COLORS_PER_PIXEL)
+#define NEOPIXEL_SEQ3_BYTES_PER_COLOR (3)                     // per definition for seq3
+typedef uint8_t neopixel_seq3[NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // 3 TX bytes per R/G/B/(W) color component
 
 /*
 -------------------------------------------------------------------------------
@@ -44,7 +23,7 @@
     - per RGBW Neopixel: use 4x in total
 
     3 bits will be transmitted for each color bit,
-    to closely match the 1/3 and 2/3 timing of the WS2812B protocol:
+    to closely match the 1/3 and 2/3 timing of the WS2812B/SK6812B_RGBW protocols:
     - color bit 0 -> 100
     - color bit 1 -> 110
 
@@ -55,7 +34,6 @@
     0xFF -> 110.1   10.11   01.10   110.1   10.11   0.110 -> 0xdb, 0x6d, 0xb6
 -------------------------------------------------------------------------------
 */
-typedef uint8_t neopixel_seq3[NEOPIXEL_SEQ3_BYTES_PER_COLOR];
 const neopixel_seq3 neopixel_seq3_color_map[256] = {
     // The data below was created with "neopixel_generate_seq3.py"
     {0x92, 0x49, 0x24}, // 0x00=0

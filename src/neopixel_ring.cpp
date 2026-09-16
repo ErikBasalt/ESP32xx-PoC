@@ -7,24 +7,27 @@
 
 #define TAG "RING"
 
-#define NEOPIXEL_RGBW 1
-#if (NEOPIXEL_RGBW)
+#if (1 == 1)
+//-----------------
+//  9x RGBW ring
+//-----------------
+NeopixelDriver<PixelType::SK6812B_RGBW> npx;
+inline constexpr PixelColor neopixelBackgroundColor = {.color = {.b = 0x10, .g = 0, .r = 0, .w = 0}}; // dimmed Blue
+inline constexpr PixelColor neopixelColored = {.color = {.b = 0, .g = 0, .r = 0, .w = 0x10}};         // dimmed White
 // #define PIXEL_COUNT (1 + 8 + 12 + 16 + 24 + 32 + 40 + 48 + 60) // 1 assembly 9 rings in total
 #define PIXEL_COUNT (8 + 12 + 16 + 24 + 32 + 40 + 48 + 60) // test: 1 pixel less
 // #define PIXEL_COUNT 1
 #else
+//-----------------
+//  3x RGB ring
+//-----------------
+NeopixelDriver<PixelType::WS2812B> npx;
+inline constexpr PixelColor neopixelBackgroundColor = {.color = {.b = 0x10, .g = 0, .r = 0, .w = 0}}; // dimmed Blue
+inline constexpr PixelColor neopixelColored = {.color = {.b = 0, .g = 0, .r = 0x10, .w = 0}};         // dimmed Red
 // #define PIXEL_COUNT (60 + 24 + 1 + 8 + 12 + 16 + 24 + 32) // 1 ring of 60, 1 ring of 24, 1 assembly of 6 rings
 #define PIXEL_COUNT (60 + 24 + 8 + 12 + 16 + 24 + 32) // test: 1 pixel less
 // #define PIXEL_COUNT 1
 #endif
-
-inline constexpr PixelColor neopixelDimmedWhite = {.color = {.b = 0, .g = 0, .r = 0, .w = 0x28}};
-inline constexpr PixelColor neopixelDimmedRed = {.color = {.b = 0, .g = 0, .r = 0x10, .w = 0}};
-inline constexpr PixelColor neopixelBackgroundColor = {.color = {.b = 0x10, .g = 0, .r = 0, .w = 0}};
-
-#define I2S_TIMEOUT_TICKS 1000
-
-NeopixelDriver npx;
 
 void allBlackNeopixelRing(void) {              // for console
     npx.setAllPixels(neopixelBackgroundColor); //@@@TODO: change to neopixelBlack
@@ -40,11 +43,7 @@ bool startNeopixelRing(void) {
     }
 
     ESP_LOGI(TAG, "Initializing NeoPixel ring on pin=%d with %d pixels", dataPin, PIXEL_COUNT);
-#if (NEOPIXEL_RGBW)
-    npx.begin(PIXEL_COUNT, dataPin, NEOPIXEL_MODE_SK6812B);
-#else
-    npx.begin(PIXEL_COUNT, dataPin, NEOPIXEL_MODE_WS2812B);
-#endif
+    npx.begin(PIXEL_COUNT, dataPin);
     //@@@TODO: error handling
 
 #if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE == 0)
@@ -110,12 +109,8 @@ void movingPixel(unsigned long currentMillis) {
     static int coloredIndex = 0;
     static int blackIndex = PIXEL_COUNT - 1;
 
-    npx.setPixel(blackIndex, neopixelBlack); // erase previously colored pixel
-#if (NEOPIXEL_RGBW)
-    npx.setPixel(coloredIndex, neopixelDimmedWhite); // set new colored pixel
-#else
-    npx.setPixel(coloredIndex, neopixelDimmedRed); // set new colored pixel
-#endif
+    npx.setPixel(blackIndex, neopixelBlack);     // erase previously colored pixel
+    npx.setPixel(coloredIndex, neopixelColored); // set new colored pixel
 
     if (npx.show()) { // send the data to the Neopixel ring
         // Update the pixel indexes for the next iteration

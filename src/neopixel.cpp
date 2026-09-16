@@ -20,6 +20,11 @@
 
 #define TAG "NPIX"
 
+// Explicit template instantiation for all supported PixelType variants
+// (see "enum class PixelType" in .h file for definition of PixelType)
+template class NeopixelDriver<PixelType::WS2812B>;
+template class NeopixelDriver<PixelType::SK6812B_RGBW>;
+
 // Minimum and maximum size of one single DMA chunk
 // Ensure yourself that calculated MIN and MAX values are integers (no fractions)
 static const size_t BYTES_PER_I2S_FRAME = 4;                                 // 1 frame = 4 bytes (16-bit stereo)
@@ -57,8 +62,9 @@ static const uint32_t NEOPIXEL_I2S_TRANSMIT_TIMEOUT_MS = 1000;
     - one for the dummy flush with all zeros
 ---------------------------------------------------------------------------------------------------
 */
-IRAM_ATTR bool NeopixelDriver::onSentCallback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *classContext) {
-    auto *c = (NeopixelDriver *)classContext;
+template <PixelType Mode>
+IRAM_ATTR bool NeopixelDriver<Mode>::onSentCallback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *classContext) {
+    auto *c = (NeopixelDriver<Mode> *)classContext;
 
     c->sentNrChunks++;
     if (c->sentNrChunks > c->stats.maxNrChunksSent) {
@@ -116,8 +122,14 @@ static void setDMAconfig(size_t &neopixelBufferSize, // [bytes]. When called: ju
     Init the driver
 ===================================================================================================
 */
-bool NeopixelDriver::begin(const size_t arg_nrPixels, const gpio_num_t dataPin, const eNeopixelMode mode) {
+template <PixelType Mode>
+bool NeopixelDriver<Mode>::begin(const size_t arg_nrPixels, const gpio_num_t dataPin) {
     uint32_t bitRate;
+
+    if (arg_nrPixels == 0) {
+        ESP_LOGE(TAG, "Number of pixels must be greater than zero");
+        return (false);
+    }
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
 
@@ -146,42 +158,33 @@ bool NeopixelDriver::begin(const size_t arg_nrPixels, const gpio_num_t dataPin, 
     ESP_LOGI(TAG, "Little-endian mode (ESP32, ESP32-S2)");
 #endif
 
-    if (arg_nrPixels == 0) {
-        ESP_LOGE(TAG, "Number of pixels must be greater than zero");
-        return (false);
-    }
-    nrPixels = arg_nrPixels;
-
-    switch (mode) {
-    case NEOPIXEL_MODE_WS2812B:
-        bitRate = WS2812B_BITRATE;
-        bytesPerPixel = WS2812B_BYTES_PER_PIXEL;
-        _selected_setPixel = &NeopixelDriver::_setPixel_ws2812b;
-        break;
-    case NEOPIXEL_MODE_SK6812B:
-        bitRate = SK6812B_BITRATE;
-        bytesPerPixel = SK6812B_BYTES_PER_PIXEL;
-        _selected_setPixel = &NeopixelDriver::_setPixel_sk6812b;
-        break;
-    default:
-        ESP_LOGE(TAG, "Invalid mode (%d)", mode);
-        return (false);
+    if constexpr (Mode == PixelType::WS2812B) {
+        //-------------------
+        //  WS2812B config
+        //-------------------
+        txBytesPerColor = NEOPIXEL_SEQ3_BYTES_PER_COLOR; // seq3 encoding uses 3 bits per color bit, so 3 bytes per R/G/B color component
+        txBytesPerPixel = txBytesPerColor * 3;           // 3 color components (R, G, B)
+        bitRate = (800000UL * txBytesPerColor);          // Neopixel at 800kHz * 3 bits = 2.4 Mbps (417 ns/bit)
+    } else if constexpr (Mode == PixelType::SK6812B_RGBW) {
+        //-------------------
+        //  SK6812B_RGBW config
+        //-------------------
+        txBytesPerColor = NEOPIXEL_SEQ3_BYTES_PER_COLOR; // seq3 encoding uses 3 bits per color bit, so 3 bytes per R/G/B/W color component
+        txBytesPerPixel = txBytesPerColor * 4;           // 4 color components (R, G, B, W)
+        bitRate = (800000UL * txBytesPerColor);          // Neopixel at 800kHz * 3 bits = 2.4 Mbps (417 ns/bit)
     }
 
-    // Calculate buffer and DMA sizes
-    bufferSize = nrPixels * bytesPerPixel;
-    ESP_LOGI(TAG, "nrPixels=%d, bytesPerPixel=%d, raw buffer size=%d bytes, bitRate=%d bps", nrPixels, bytesPerPixel, bufferSize, bitRate);
+    // Define buffer and DMA sizes
+    bufferSize = arg_nrPixels * txBytesPerPixel;
+    ESP_LOGI(TAG, "nrPixels=%d, txBytesPerPixel=%d, raw buffer size=%d bytes, bitRate=%d bps", arg_nrPixels, txBytesPerPixel, bufferSize, bitRate);
 
-    setDMAconfig(bufferSize, &chan_cfg); // bufferSize called by reference, it can be increased
+    setDMAconfig(bufferSize, &chan_cfg); // NOTE: bufferSize called by reference, it can be increased
 
     ESP_LOGI(TAG, "Optimised buffer size=%d bytes, frames/chunk=%d, bytes/frame=%d, DMA chunks=%d", bufferSize, chan_cfg.dma_frame_num, BYTES_PER_I2S_FRAME, chan_cfg.dma_desc_num);
 
     totalNrChunks = chan_cfg.dma_desc_num; // to check in callback if all chunks have been sent
-#if (200 == 200)
+
     buffer = (uint8_t *)malloc(bufferSize);
-#else
-    buffer = (uint8_t *)heap_caps_malloc(bufferSize, MALLOC_CAP_DMA); //@@@TODO: is DMA capability really needed?
-#endif
     memset(buffer, 0, bufferSize); // esp. to ensure the unused bytes in last frame are zeroed
 
     // Calculate speed
@@ -202,11 +205,14 @@ bool NeopixelDriver::begin(const size_t arg_nrPixels, const gpio_num_t dataPin, 
     i2s_event_callbacks_t callbacks = {
         .on_recv = nullptr,
         .on_recv_q_ovf = nullptr,
-        //.on_sent = i2s_tx_queue_sent_callback,
         .on_sent = NeopixelDriver::onSentCallback,
         .on_send_q_ovf = nullptr,
     };
     ESP_ERROR_CHECK(i2s_channel_register_event_callback(i2s, &callbacks, this));
+
+    // Only now store the nrPixels
+    // (when it remains 0, it means begin() was not called successfully)
+    nrPixels = arg_nrPixels;
 
     return (true);
 }
@@ -218,7 +224,8 @@ bool NeopixelDriver::begin(const size_t arg_nrPixels, const gpio_num_t dataPin, 
 */
 #define NEOPIXEL_MINIMUM_INTERVAL_US (1000)
 
-bool NeopixelDriver::show(void) {
+template <PixelType Mode>
+bool NeopixelDriver<Mode>::show(void) {
 
     static int64_t endMicros = 0 - NEOPIXEL_MINIMUM_INTERVAL_US;
     int64_t startMicros = esp_timer_get_time();
@@ -303,49 +310,55 @@ bool NeopixelDriver::show(void) {
 }
 
 /*
----------------------------------------------------------------------------------------------------
-    WS2812B specific function to set a single pixel's color in the buffer
----------------------------------------------------------------------------------------------------
+===================================================================================================
+    Generic function to set the pulse transmit sequence of one single pixel in the buffer
+===================================================================================================
 */
-void NeopixelDriver::_setPixel_ws2812b(const size_t index, const PixelColor pixel) {
-    size_t offset = index * WS2812B_BYTES_PER_PIXEL;
-
-    const uint8_t *sequence = neopixel_seq3_color_map[pixel.color.g];
-    for (int i = 0; i < WS2812B_BYTES_PER_PIXEL; ++i, ++offset) { //@@@TODO: consider replacing for-loop with written-out statements
-        if (i == 3)
-            sequence = neopixel_seq3_color_map[pixel.color.r];
-        if (i == 6)
-            sequence = neopixel_seq3_color_map[pixel.color.b];
-#if (NEOPIXEL_ENABLE_BIG_ENDIAN)
-        buffer[offset] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // using Big-endian, no need to swap bytes
-#else
-        // buffer[offset] = __builtin_bswap32(sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]); // fill buffer in 16-bit Little-endian format
-        buffer[offset ^ 1] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // fill buffer in 16-bit Little-endian format
-#endif
+template <PixelType Mode>
+void NeopixelDriver<Mode>::setPixel(const size_t index, const PixelColor pixel) {
+    if (index >= nrPixels) {
+        return; // silently ignore
     }
-}
 
-/*
----------------------------------------------------------------------------------------------------
-    SK6812B specific function to set a single pixel's color in the buffer
----------------------------------------------------------------------------------------------------
-*/
-void NeopixelDriver::_setPixel_sk6812b(const size_t index, const PixelColor pixel) {
-    size_t offset = index * SK6812B_BYTES_PER_PIXEL;
+    if constexpr (Mode == PixelType::WS2812B) {
+        //---------------------------------------
+        //  Set one WS2812B pixel, RGB
+        //---------------------------------------
+        size_t offset = index * txBytesPerPixel;
 
-    const uint8_t *sequence = neopixel_seq3_color_map[pixel.color.g];
-    for (int i = 0; i < SK6812B_BYTES_PER_PIXEL; ++i, ++offset) {
-        if (i == 3)
-            sequence = neopixel_seq3_color_map[pixel.color.r];
-        if (i == 6)
-            sequence = neopixel_seq3_color_map[pixel.color.b];
-        if (i == 9)
-            sequence = neopixel_seq3_color_map[pixel.color.w];
+        const uint8_t *sequence = neopixel_seq3_color_map[pixel.color.g];
+        for (int i = 0; i < txBytesPerPixel; i++, offset++) { //@@@TODO: consider replacing for-loop with written-out statements
+            if (i == 3)
+                sequence = neopixel_seq3_color_map[pixel.color.r];
+            if (i == 6)
+                sequence = neopixel_seq3_color_map[pixel.color.b];
 #if (NEOPIXEL_ENABLE_BIG_ENDIAN)
-        buffer[offset] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // using Big-endian, no need to swap bytes
+            buffer[offset] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // using Big-endian, no need to swap bytes
 #else
-        // buffer[offset] = __builtin_bswap32(sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]); // fill buffer in 16-bit Little-endian format
-        buffer[offset ^ 1] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // fill buffer in 16-bit Little-endian format
+            // buffer[offset] = __builtin_bswap32(sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]); // fill buffer in 16-bit Little-endian format
+            buffer[offset ^ 1] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // fill buffer in 16-bit Little-endian format
 #endif
-    }
+        }
+    } else if constexpr (Mode == PixelType::SK6812B_RGBW) {
+        //---------------------------------------
+        //  Set one SK6812B_RGBW pixel, RGBW
+        //---------------------------------------
+        size_t offset = index * txBytesPerPixel;
+
+        const uint8_t *sequence = neopixel_seq3_color_map[pixel.color.g];
+        for (int i = 0; i < txBytesPerPixel; i++, offset++) {
+            if (i == 3)
+                sequence = neopixel_seq3_color_map[pixel.color.r];
+            if (i == 6)
+                sequence = neopixel_seq3_color_map[pixel.color.b];
+            if (i == 9)
+                sequence = neopixel_seq3_color_map[pixel.color.w];
+#if (NEOPIXEL_ENABLE_BIG_ENDIAN)
+            buffer[offset] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // using Big-endian, no need to swap bytes
+#else
+            // buffer[offset] = __builtin_bswap32(sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]); // fill buffer in 16-bit Little-endian format
+            buffer[offset ^ 1] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // fill buffer in 16-bit Little-endian format
+#endif
+        }
+    } // else: unknown method mode, ignore
 }
