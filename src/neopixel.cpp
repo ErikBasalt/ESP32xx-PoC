@@ -10,11 +10,11 @@
 #include <esp_log.h>
 
 #include "neopixel.h"
-#include "neopixel_seq3_protocols.h"
+#include "neopixel_seq3.h"
+#include "neopixel_seq4.h"
 
 #if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE)
 // For enable/disable TX output at each transmit, allowing better scope triggering
-//@@@TODO: remove, enable/disable should be done outside of this driver
 #include "hal.h"
 #endif
 
@@ -22,8 +22,9 @@
 
 // Explicit template instantiation for all supported PixelType variants
 // (see "enum class PixelType" in .h file for definition of PixelType)
-template class NeopixelDriver<PixelType::WS2812B>;
-template class NeopixelDriver<PixelType::SK6812B_RGBW>;
+template class NeopixelDriver<PixelType::GRB_SEQ3>;
+template class NeopixelDriver<PixelType::GRBW_SEQ3>;
+template class NeopixelDriver<PixelType::GRBW_SEQ4>;
 
 // Minimum and maximum size of one single DMA chunk
 // Ensure yourself that calculated MIN and MAX values are integers (no fractions)
@@ -158,20 +159,33 @@ bool NeopixelDriver<Mode>::begin(const size_t arg_nrPixels, const gpio_num_t dat
     ESP_LOGI(TAG, "Little-endian mode (ESP32, ESP32-S2)");
 #endif
 
-    if constexpr (Mode == PixelType::WS2812B) {
-        //-------------------
-        //  WS2812B config
-        //-------------------
+    if constexpr (Mode == PixelType::GRB_SEQ3) {
+        //---------------------------------------
+        //  GRB, seq3 timing
+        //---------------------------------------
+        ESP_LOGI(TAG, "GRB Neopixels, seq3 timing");
         txBytesPerColor = NEOPIXEL_SEQ3_BYTES_PER_COLOR; // seq3 encoding uses 3 bits per color bit, so 3 bytes per R/G/B color component
-        txBytesPerPixel = txBytesPerColor * 3;           // 3 color components (R, G, B)
+        txBytesPerPixel = txBytesPerColor * 3;           // 3 color components (R, G, B), 9 bytes in total
         bitRate = (800000UL * txBytesPerColor);          // Neopixel at 800kHz * 3 bits = 2.4 Mbps (417 ns/bit)
-    } else if constexpr (Mode == PixelType::SK6812B_RGBW) {
-        //-------------------
-        //  SK6812B_RGBW config
-        //-------------------
+    } else if constexpr (Mode == PixelType::GRBW_SEQ3) {
+        //---------------------------------------
+        //  GRBW, seq3 timing
+        //---------------------------------------
+        ESP_LOGI(TAG, "GRBW Neopixels, seq3 timing");
         txBytesPerColor = NEOPIXEL_SEQ3_BYTES_PER_COLOR; // seq3 encoding uses 3 bits per color bit, so 3 bytes per R/G/B/W color component
-        txBytesPerPixel = txBytesPerColor * 4;           // 4 color components (R, G, B, W)
+        txBytesPerPixel = txBytesPerColor * 4;           // 4 color components (R, G, B, W), 12 bytes in total
         bitRate = (800000UL * txBytesPerColor);          // Neopixel at 800kHz * 3 bits = 2.4 Mbps (417 ns/bit)
+    } else if constexpr (Mode == PixelType::GRBW_SEQ4) {
+        //---------------------------------------
+        //  GRBW, seq4 timing
+        //---------------------------------------
+        ESP_LOGI(TAG, "GRBW Neopixels, seq4 timing");
+        txBytesPerColor = NEOPIXEL_SEQ4_BYTES_PER_COLOR; // seq4 encoding uses 4 bits per color bit, so 4 bytes per R/G/B color component
+        txBytesPerPixel = txBytesPerColor * 4;           // 4 color components (G, R, B, W), 16 bytes in total
+        bitRate = (800000UL * txBytesPerColor);          // Neopixel at 800kHz * 4 bits = 3.2 Mbps (312.5 ns/bit)
+    } else {
+        ESP_LOGE(TAG, "Unknown pixel type=%d", static_cast<int>(Mode));
+        return (false);
     }
 
     // Define buffer and DMA sizes
@@ -185,6 +199,10 @@ bool NeopixelDriver<Mode>::begin(const size_t arg_nrPixels, const gpio_num_t dat
     totalNrChunks = chan_cfg.dma_desc_num; // to check in callback if all chunks have been sent
 
     buffer = (uint8_t *)malloc(bufferSize);
+    if (buffer == nullptr) {
+        ESP_LOGE(TAG, "Failed to allocate buffer of size %d bytes", bufferSize);
+        return (false);
+    }
     memset(buffer, 0, bufferSize); // esp. to ensure the unused bytes in last frame are zeroed
 
     // Calculate speed
@@ -320,9 +338,9 @@ void NeopixelDriver<Mode>::setPixel(const size_t index, const PixelColor pixel) 
         return; // silently ignore
     }
 
-    if constexpr (Mode == PixelType::WS2812B) {
+    if constexpr (Mode == PixelType::GRB_SEQ3) {
         //---------------------------------------
-        //  Set one WS2812B pixel, RGB
+        //  Set one GRB pixel, seq3 timing
         //---------------------------------------
         size_t offset = index * txBytesPerPixel;
 
@@ -339,9 +357,9 @@ void NeopixelDriver<Mode>::setPixel(const size_t index, const PixelColor pixel) 
             buffer[offset ^ 1] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // fill buffer in 16-bit Little-endian format
 #endif
         }
-    } else if constexpr (Mode == PixelType::SK6812B_RGBW) {
+    } else if constexpr (Mode == PixelType::GRBW_SEQ3) {
         //---------------------------------------
-        //  Set one SK6812B_RGBW pixel, RGBW
+        //  Set one GRBW pixel, seq3 timing
         //---------------------------------------
         size_t offset = index * txBytesPerPixel;
 
@@ -360,5 +378,23 @@ void NeopixelDriver<Mode>::setPixel(const size_t index, const PixelColor pixel) 
             buffer[offset ^ 1] = sequence[i % NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // fill buffer in 16-bit Little-endian format
 #endif
         }
-    } // else: unknown method mode, ignore
+    } else if constexpr (Mode == PixelType::GRBW_SEQ4) {
+        //---------------------------------------
+        //  Set one GRBW pixel, seq4 timing
+        //---------------------------------------
+        auto set_seq4_color = [](uint8_t colorByte, uint8_t *buffer) { // lambda to set one color byte in seq4 format
+            const uint8_t *hi = encode_seq4_nibble[colorByte >> 4];
+            const uint8_t *lo = encode_seq4_nibble[colorByte & 0x0F];
+            buffer[0] = hi[0];
+            buffer[1] = hi[1];
+            buffer[2] = lo[0];
+            buffer[3] = lo[1];
+        };
+
+        size_t offset = index * txBytesPerPixel;
+        set_seq4_color(pixel.color.g, &buffer[offset]);
+        set_seq4_color(pixel.color.r, &buffer[offset + NEOPIXEL_SEQ4_BYTES_PER_COLOR]);
+        set_seq4_color(pixel.color.b, &buffer[offset + (2 * NEOPIXEL_SEQ4_BYTES_PER_COLOR)]);
+        set_seq4_color(pixel.color.w, &buffer[offset + (3 * NEOPIXEL_SEQ4_BYTES_PER_COLOR)]);
+    } // else: unknown pixel type, should not occur
 }

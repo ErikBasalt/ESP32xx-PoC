@@ -7,26 +7,33 @@
 
 #define TAG "RING"
 
-#if (1 == 1)
+#if (1 == 0)
 //-----------------
 //  9x RGBW ring
 //-----------------
-NeopixelDriver<PixelType::SK6812B_RGBW> npx;
-inline constexpr PixelColor neopixelBackgroundColor = {.color = {.b = 0x10, .g = 0, .r = 0, .w = 0}}; // dimmed Blue
-inline constexpr PixelColor neopixelColored = {.color = {.b = 0, .g = 0, .r = 0, .w = 0x10}};         // dimmed White
+// NeopixelDriver<PixelType::SK6812B_RGBW> npx;
+NeopixelDriver<PixelType::GRBW_SEQ4> npx;
+//  NeopixelDriver<static_cast<PixelType>(666)> npx;
+
+inline constexpr PixelColor neopixelBackgroundColor = {.color = {.b = 0x03, .g = 0, .r = 0, .w = 0}}; // dimmed Blue
+                                                                                                      // inline constexpr PixelColor neopixelColored = {.color = {.b = 0, .g = 0, .r = 0, .w = 0x03}};         // dimmed White
+inline constexpr PixelColor neopixelColored = {.color = {.b = 0x03, .g = 0x02, .r = 0, .w = 0}};      // dimmed cyan
+
 // #define PIXEL_COUNT (1 + 8 + 12 + 16 + 24 + 32 + 40 + 48 + 60) // 1 assembly 9 rings in total
-#define PIXEL_COUNT (8 + 12 + 16 + 24 + 32 + 40 + 48 + 60) // test: 1 pixel less
-// #define PIXEL_COUNT 1
+#define PIXEL_COUNT (1 + 8 + 12 + 16 + 24 + 32 + 40 + 48 + 60 - 1) // test: 1 pixel less
+// #define PIXEL_COUNT (1)
 #else
 //-----------------
 //  3x RGB ring
 //-----------------
-NeopixelDriver<PixelType::WS2812B> npx;
+NeopixelDriver<PixelType::GRB_SEQ3> npx;
 inline constexpr PixelColor neopixelBackgroundColor = {.color = {.b = 0x10, .g = 0, .r = 0, .w = 0}}; // dimmed Blue
 inline constexpr PixelColor neopixelColored = {.color = {.b = 0, .g = 0, .r = 0x10, .w = 0}};         // dimmed Red
+
 // #define PIXEL_COUNT (60 + 24 + 1 + 8 + 12 + 16 + 24 + 32) // 1 ring of 60, 1 ring of 24, 1 assembly of 6 rings
-#define PIXEL_COUNT (60 + 24 + 8 + 12 + 16 + 24 + 32) // test: 1 pixel less
-// #define PIXEL_COUNT 1
+#define PIXEL_COUNT (60 + 24 + 1 + 8 + 12 + 16 + 24 + 32 - 1) // test: 1 pixel less
+// #define PIXEL_COUNT (60 + 24 + 1 + 8 + 12 + 16 + 24 + 32 + 1) // test: 1 pixel more
+// #define PIXEL_COUNT 61
 #endif
 
 void allBlackNeopixelRing(void) {              // for console
@@ -120,8 +127,8 @@ void movingPixel(unsigned long currentMillis) {
             coloredIndex = 0;
 
             statistics(currentMillis);
-        } // else: busy, try again later
-    }
+        }
+    } // else: busy, try again later
 }
 
 void loopNeopixelRing(unsigned long currentMillis) {

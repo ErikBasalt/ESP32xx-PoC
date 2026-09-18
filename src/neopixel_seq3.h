@@ -34,7 +34,7 @@ typedef uint8_t neopixel_seq3[NEOPIXEL_SEQ3_BYTES_PER_COLOR]; // 3 TX bytes per 
     0xFF -> 110.1   10.11   01.10   110.1   10.11   0.110 -> 0xdb, 0x6d, 0xb6
 -------------------------------------------------------------------------------
 */
-const neopixel_seq3 neopixel_seq3_color_map[256] = {
+static const neopixel_seq3 neopixel_seq3_color_map[256] = {
     // The data below was created with "neopixel_generate_seq3.py"
     {0x92, 0x49, 0x24}, // 0x00=0
     {0x92, 0x49, 0x26}, // 0x01=1
