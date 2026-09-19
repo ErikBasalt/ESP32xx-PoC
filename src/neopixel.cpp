@@ -354,10 +354,23 @@ bool NeopixelDriver<Mode>::show(void) {
 ===================================================================================================
 */
 template <PixelType Mode>
-void NeopixelDriver<Mode>::setPixel(const size_t index, const PixelColor pixel) {
+void NeopixelDriver<Mode>::setPixel(const size_t index, PixelColor pixel) {
     if (index >= nrPixels) {
         return; // silently ignore
     }
+
+    if (brightness != 255) {
+        //---------------------------------------
+        //  Apply global brighness
+        //---------------------------------------
+        if (pixel.color.r) pixel.color.r = (pixel.color.r * brightness) >> 8;
+        if (pixel.color.g) pixel.color.g = (pixel.color.g * brightness) >> 8;
+        if (pixel.color.b) pixel.color.b = (pixel.color.b * brightness) >> 8;
+        if constexpr ((Mode == PixelType::GRBW_SEQ3) || (Mode == PixelType::GRBW_SEQ4)) {
+            // Only when the Neopixels actually have a white component
+            if (pixel.color.w) pixel.color.w = (pixel.color.w * brightness) >> 8;
+        }
+    } // else: max brightness, no adjustment
 
     if constexpr (Mode == PixelType::GRB_SEQ3) {
         //---------------------------------------

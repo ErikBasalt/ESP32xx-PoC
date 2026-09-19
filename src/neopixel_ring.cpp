@@ -17,7 +17,7 @@ NeopixelDriver<PixelType::GRBW_SEQ4> npx;
 
 inline constexpr PixelColor neopixelBackgroundColor = {.color = {.b = 0x03, .g = 0, .r = 0, .w = 0}}; // dimmed Blue
                                                                                                       // inline constexpr PixelColor neopixelColored = {.color = {.b = 0, .g = 0, .r = 0, .w = 0x03}};         // dimmed White
-inline constexpr PixelColor neopixelColored = {.color = {.b = 0x03, .g = 0x02, .r = 0, .w = 0}};      // dimmed cyan
+inline constexpr PixelColor neopixelColored = {.color = {.b = 0x30, .g = 0x20, .r = 0, .w = 0}};      // fairly brigh cyan, should be dimmed
 
 // #define PIXEL_COUNT (1 + 8 + 12 + 16 + 24 + 32 + 40 + 48 + 60) // 1 assembly 9 rings in total
 #define PIXEL_COUNT (1 + 8 + 12 + 16 + 24 + 32 + 40 + 48 + 60 - 1) // test: 1 pixel less
@@ -131,14 +131,48 @@ void movingPixel(unsigned long currentMillis) {
     } // else: busy, try again later
 }
 
+uint16_t readPoti(void) {
+    static uint32_t avg = 0; // 32 bit integer is easily large enough to max 3300 (12 bits) + 4x shift (avg << 4)
+
+    avg = ((avg << 4) - avg + hal.readAnalog()) >> 4; // 0...3300 (mV)
+
+    return (avg);
+}
+
+/*
+=========================================================================================
+    Loop
+=========================================================================================
+*/
 void loopNeopixelRing(unsigned long currentMillis) {
-    // Throttle the ring updates for better visibility (if needed)
+    //---------------------------------------------------------------
+    //  Throttle the ring updates for better visibility (if needed)
+    //---------------------------------------------------------------
     static unsigned long timeoutMillis = 0;
     if ((long)(currentMillis - timeoutMillis) < 0) {
         return;
     }
-    timeoutMillis = currentMillis + 0; // "+ 0" is full speed
+    timeoutMillis = currentMillis + 0; // update the timeout for the next iteration
 
+    //---------------------------------------------------------------
+    //  Adjust brightness based on potentiometer reading
+    //---------------------------------------------------------------
+    static unsigned long readPotiTimeoutMillis = 0;
+
+    if ((long)(currentMillis - readPotiTimeoutMillis) >= 0) {
+        static uint16_t potiValue = 0;
+        uint16_t newPotiValue = readPoti();
+        if (newPotiValue != potiValue) {
+            npx.brightness = ((unsigned)potiValue * 255) / 3300; // scale 0...3300 to 0...64
+            // ESP_LOGI("Neopixel", "Poti=%u, brightness=%u", potiValue, npx.brightness);
+            potiValue = newPotiValue;
+        }
+        readPotiTimeoutMillis = currentMillis + 10;
+    }
+
+    //---------------------------------------------------------------
+    //  Animate the Neopixel ring
+    //---------------------------------------------------------------
     if (PIXEL_COUNT == 1) {
         animateSinglePixel(currentMillis);
     } else {

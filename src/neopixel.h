@@ -67,7 +67,8 @@ enum class PixelType {
 ===================================================================================================
     Neopixel Driver class
 
-    Instantiate with a specific PixelType (eg: "npx = NeopixelDriver<PixelType::GRB_SEQ3>;")
+    Instantiate with a specific PixelType, for example:
+    npx = NeopixelDriver<PixelType::GRB_SEQ3>;
 ===================================================================================================
 */
 template <PixelType Mode>
@@ -119,6 +120,9 @@ class NeopixelDriver {
     }
 
   public:
+    // Global brightness (min=0...max=255)
+    uint8_t brightness = 255;
+
     struct NeopixelStatistics {
         int64_t maxSendMicros;
         uint32_t maxNrChunksSent;
