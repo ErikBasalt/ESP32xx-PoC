@@ -245,6 +245,9 @@ bool NeopixelDriver<Mode>::begin(const size_t arg_nrPixels, const gpio_num_t dat
 template <PixelType Mode>
 bool NeopixelDriver<Mode>::show(void) {
 
+    //-------------------------------------------
+    //  Prevent sending too frequently
+    //-------------------------------------------
     static int64_t endMicros = 0 - NEOPIXEL_MINIMUM_INTERVAL_US;
     int64_t startMicros = esp_timer_get_time();
 
@@ -256,6 +259,9 @@ bool NeopixelDriver<Mode>::show(void) {
         startMicros = esp_timer_get_time(); // do not include this delay in the write timing calculation
     } // else: sufficient time has passed since the previous end time
 
+    //-------------------------------------------
+    //  Preload the data into I2S
+    //-------------------------------------------
     size_t bytesLoaded = 0;
     esp_err_t rv = i2s_channel_preload_data(i2s, buffer, bufferSize, &bytesLoaded);
     if (rv != ESP_OK) {
@@ -284,6 +290,10 @@ bool NeopixelDriver<Mode>::show(void) {
         }
     }
 
+    //-------------------------------------------
+    //  Enable the channel,
+    //  this will start sending to the Neopixels
+    //-------------------------------------------
     sentNrChunks = 0;
 
 #if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE)
@@ -299,11 +309,18 @@ bool NeopixelDriver<Mode>::show(void) {
         }
     }
 
+    //-------------------------------------------
+    //  Wait until sending is done
+    //-------------------------------------------
     if (xSemaphoreTake(allSentSemaphore, pdMS_TO_TICKS(NEOPIXEL_I2S_TRANSMIT_TIMEOUT_MS)) != pdTRUE) { // wait until all DMA transfers are done
         // Never happens (mostly tested with 500ms)
         ESP_LOGE(TAG, "Timeout waiting for DMA transfer to complete");
     } // else: transmit completed in time
 
+    //-------------------------------------------
+    //  Disable the channel,
+    //  to ensure I2S really stops sending
+    //-------------------------------------------
     {
         esp_err_t rv;
         rv = i2s_channel_disable(i2s);
@@ -317,6 +334,10 @@ bool NeopixelDriver<Mode>::show(void) {
     hal.setNeoPixelEnable(false); // disable the data output
 #endif
 
+    //-------------------------------------------
+    //  Measure elapsed time
+    //  (also to prevent sending too frequently)
+    //-------------------------------------------
     endMicros = esp_timer_get_time();
     int64_t writeMicros = endMicros - startMicros;
     if (writeMicros > stats.maxSendMicros) {
