@@ -12,9 +12,16 @@
 #include <driver/i2s_std.h>
 #include <driver/i2s_common.h>
 
+// Enable or disable using a task to wait for I2S transmission completion
+#define ENABLE_I2S_TASK_VERSION 0
+
+#if (ENABLE_I2S_TASK_VERSION)
+#include "neopixel_task.h"
+#else
 // Enable or disable output at every write to the Neopixels, for scope triggering on the Enable signal
 //@@@TODO: remove, enable/disable should be done outside of this driver
 #define NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE 1
+#endif
 
 #ifdef __cplusplus
 /*
@@ -71,11 +78,14 @@ enum class PixelType {
     npx = NeopixelDriver<PixelType::GRB_SEQ3>;
 ===================================================================================================
 */
+
+class NeopixelTransmitControl; // forward declaration, to use as friend class
+
 template <PixelType Mode>
 class NeopixelDriver {
   private:
     // I2S
-    i2s_chan_handle_t i2s; // the I2S channel handle in use (ESP32 and ESP32-S2 have 2 channels)
+    i2s_chan_handle_t i2s; // the I2S channel handle in use (ESP32 and ESP32-S2 have 2 channels) @@@TODO: move to NeopixelTransmitControl ?
 
     // Neopixel config
     size_t txBytesPerColor; // number of bytes to be sent per R/G/B/(W) color component, depends on seq3/seq4 timing
@@ -87,11 +97,15 @@ class NeopixelDriver {
     size_t bufferSize = 0;     // [bytes]
 
     // Transmission tracking
+#if (ENABLE_I2S_TASK_VERSION)
+    NeopixelTransmitControl txControl; // the class controlling the I2S transmissions
+#else
     SemaphoreHandle_t allSentSemaphore; // all chunks have been sent to the Neopixels
     int totalNrChunks;                  // total number of DMA chunks (descriptors) for the complete Neopixel data transmission (incl data flush)
     int sentNrChunks;                   // actual number of chunks (being) sent, used for tracking the transmit progress
 
     static IRAM_ATTR bool onSentCallback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *classContext); // in cpp
+#endif
 
     // Private method to fill a range of pixels with the specified color
     void _fillPixelRange(size_t startIndex, size_t nrPixelsInRange, const PixelColor color) {
@@ -118,6 +132,10 @@ class NeopixelDriver {
             }
         } // else: just one (1) Neopixel in the range
     }
+
+#if (ENABLE_I2S_TASK_VERSION)
+    friend class NeopixelTransmitControl; // allow NeopixelTransmitControl to access private members of NeopixelDriver
+#endif
 
   public:
     // Global brightness (min=0...max=255)

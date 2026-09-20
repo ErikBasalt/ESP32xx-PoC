@@ -54,6 +54,7 @@ static const uint32_t NEOPIXEL_I2S_TRANSMIT_TIMEOUT_MS = 1000;
 #define NEOPIXEL_ENABLE_BIG_ENDIAN 1
 #endif
 
+#if (ENABLE_I2S_TASK_VERSION == 0)
 /*
 ---------------------------------------------------------------------------------------------------
     Interrupt callback for I2S transmission completion of one single DMA chunk
@@ -76,12 +77,55 @@ IRAM_ATTR bool NeopixelDriver<Mode>::onSentCallback(i2s_chan_handle_t handle, i2
         c->stats.maxNrChunksSent = c->sentNrChunks;
     }
 
+#if (0 == 1)
     if (c->sentNrChunks == c->totalNrChunks) {
         // All Neopixel DMA chunks (incl dummy flush) have been sent, signal the waiting task it can continue now
-        xSemaphoreGive(c->allSentSemaphore);
+        xSemaphoreGive(c->allSentSemaphore); //@@@TODO: use xSemaphoreGiveFromISR() if called from ISR ?!!
     }
     return (false); // no need for RTOS to check immediately for higher priority task
+#else
+    BaseType_t high_task_woken = pdFALSE;
+    if (c->sentNrChunks == c->totalNrChunks) {
+        // All Neopixel DMA chunks (incl dummy flush) have been sent, signal the waiting task it can continue now
+
+        xSemaphoreGiveFromISR(c->allSentSemaphore, &high_task_woken);
+    }
+    return (high_task_woken == pdTRUE);
+#endif
 }
+#endif
+
+/*
+@@@@@@@@@@@@@@@@@@@@@@@
+bool IRAM_ATTR onI2SSent(
+    i2s_chan_handle_t handle,
+    i2s_event_data_t *event,
+    void *user_ctx)
+{
+    BaseType_t high_task_woken = pdFALSE;
+
+    xSemaphoreGiveFromISR(
+        (SemaphoreHandle_t)user_ctx,
+        &high_task_woken
+    );
+
+    return high_task_woken == pdTRUE;
+}
+@@@@@@@@@@
+{
+    BaseType_t high_task_woken = pdFALSE;
+
+    xTaskNotifyFromISR(
+        (TaskHandle_t)user_ctx,
+        EVT_SENT,
+        eSetBits,
+        &high_task_woken
+    );
+
+    return high_task_woken == pdTRUE;
+}
+@@@@@@@@@@@@@@@@@@@@@@@@
+*/
 
 /*
 ---------------------------------------------------------------------------------------------------
@@ -196,8 +240,6 @@ bool NeopixelDriver<Mode>::begin(const size_t arg_nrPixels, const gpio_num_t dat
 
     ESP_LOGI(TAG, "Optimised buffer size=%d bytes, frames/chunk=%d, bytes/frame=%d, DMA chunks=%d", bufferSize, chan_cfg.dma_frame_num, BYTES_PER_I2S_FRAME, chan_cfg.dma_desc_num);
 
-    totalNrChunks = chan_cfg.dma_desc_num; // to check in callback if all chunks have been sent
-
     buffer = (uint8_t *)malloc(bufferSize);
     if (buffer == nullptr) {
         ESP_LOGE(TAG, "Failed to allocate buffer of size %d bytes", bufferSize);
@@ -212,8 +254,10 @@ bool NeopixelDriver<Mode>::begin(const size_t arg_nrPixels, const gpio_num_t dat
     ESP_LOGI(TAG, "I2S data TX time=%lld us", (int64_t)(chan_cfg.dma_frame_num * chan_cfg.dma_desc_num) * 1000000 / std_cfg.clk_cfg.sample_rate_hz);
 
     // Housekeeping stuff
+#if (ENABLE_I2S_TASK_VERSION == 0)
     allSentSemaphore = xSemaphoreCreateBinary(); // to get notified when all DMA chunks data has been transmitted by I2S
-    stats = {};                                  // reset all statistics to zero
+#endif
+    stats = {}; // reset all statistics to zero
 
     // Let's go
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &i2s, nullptr)); // create TX channel only (no RX)
@@ -223,10 +267,23 @@ bool NeopixelDriver<Mode>::begin(const size_t arg_nrPixels, const gpio_num_t dat
     i2s_event_callbacks_t callbacks = {
         .on_recv = nullptr,
         .on_recv_q_ovf = nullptr,
+#if (ENABLE_I2S_TASK_VERSION)
+        .on_sent = &txControl.onSentCallback, //@@@TODO: why pointer (&) here, and not below?
+#else
         .on_sent = NeopixelDriver::onSentCallback,
+#endif
+
         .on_send_q_ovf = nullptr,
     };
     ESP_ERROR_CHECK(i2s_channel_register_event_callback(i2s, &callbacks, this));
+
+#if (ENABLE_I2S_TASK_VERSION)
+    ESP_LOGI(TAG, "Use task for TX control");
+    txControl.init(xTaskGetCurrentTaskHandle(), i2s, chan_cfg.dma_desc_num);
+#else
+    ESP_LOGI(TAG, "No separate tasks");
+    totalNrChunks = chan_cfg.dma_desc_num; // to check in callback if all chunks have been sent
+#endif
 
     // Only now store the nrPixels
     // (when it remains 0, it means begin() was not called successfully)
@@ -245,6 +302,12 @@ bool NeopixelDriver<Mode>::begin(const size_t arg_nrPixels, const gpio_num_t dat
 template <PixelType Mode>
 bool NeopixelDriver<Mode>::show(void) {
 
+#if (ENABLE_I2S_TASK_VERSION)
+    int64_t startMicros = esp_timer_get_time();
+    int64_t endMicros; // @@@TODO: only needed below?
+
+    txControl.waitUntilReady();
+#else
     //-------------------------------------------
     //  Prevent sending too frequently
     //-------------------------------------------
@@ -258,7 +321,7 @@ bool NeopixelDriver<Mode>::show(void) {
         vTaskDelay(pdMS_TO_TICKS(1));       // 1 ms
         startMicros = esp_timer_get_time(); // do not include this delay in the write timing calculation
     } // else: sufficient time has passed since the previous end time
-
+#endif
     //-------------------------------------------
     //  Preload the data into I2S
     //-------------------------------------------
@@ -290,11 +353,18 @@ bool NeopixelDriver<Mode>::show(void) {
         }
     }
 
+#if (ENABLE_I2S_TASK_VERSION == 0)
+    sentNrChunks = 0;
+#endif
+
     //-------------------------------------------
     //  Enable the channel,
     //  this will start sending to the Neopixels
     //-------------------------------------------
-    sentNrChunks = 0;
+
+#if (ENABLE_I2S_TASK_VERSION)
+    txControl.startTransmit();
+#else
 
 #if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE)
     hal.setNeoPixelEnable(true); // enable the data output
@@ -334,6 +404,7 @@ bool NeopixelDriver<Mode>::show(void) {
     hal.setNeoPixelEnable(false); // disable the data output
 #endif
 
+#endif
     //-------------------------------------------
     //  Measure elapsed time
     //  (also to prevent sending too frequently)
