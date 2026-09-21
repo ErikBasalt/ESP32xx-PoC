@@ -26,15 +26,6 @@ template class NeopixelDriver<PixelType::GRB_SEQ3>;
 template class NeopixelDriver<PixelType::GRBW_SEQ3>;
 template class NeopixelDriver<PixelType::GRBW_SEQ4>;
 
-// Minimum and maximum size of one single DMA chunk
-// Ensure yourself that calculated MIN and MAX values are integers (no fractions)
-static const size_t BYTES_PER_I2S_FRAME = 4;                                 // 1 frame = 4 bytes (16-bit stereo)
-static const uint32_t MIN_FRAMES_PER_DMA_CHUNK = 32 / BYTES_PER_I2S_FRAME;   // 8 frames, too small will make driver unstable
-static const uint32_t MAX_FRAMES_PER_DMA_CHUNK = 4000 / BYTES_PER_I2S_FRAME; // 1000 frames, limited by ESP32 DMA hardware (absolute max is 4032 for newer ESP32xx types)
-static const size_t DUMMY_FLUSH_BYTES = MIN_FRAMES_PER_DMA_CHUNK * BYTES_PER_I2S_FRAME;
-
-static const uint32_t NEOPIXEL_I2S_TRANSMIT_TIMEOUT_MS = 1000;
-
 #if (SOC_I2S_HW_VERSION_1)
 // NOTE: !! VSC is not aware of this define, therefore syntax highlighting does NOT work here !!
 
@@ -55,6 +46,15 @@ static const uint32_t NEOPIXEL_I2S_TRANSMIT_TIMEOUT_MS = 1000;
 #endif
 
 #if (ENABLE_I2S_TASK_VERSION == 0)
+// Minimum and maximum size of one single DMA chunk
+// Ensure yourself that calculated MIN and MAX values are integers (no fractions)
+static const size_t BYTES_PER_I2S_FRAME = 4;                                 // 1 frame = 4 bytes (16-bit stereo)
+static const uint32_t MIN_FRAMES_PER_DMA_CHUNK = 32 / BYTES_PER_I2S_FRAME;   // 8 frames, too small will make driver unstable
+static const uint32_t MAX_FRAMES_PER_DMA_CHUNK = 4000 / BYTES_PER_I2S_FRAME; // 1000 frames, limited by ESP32 DMA hardware (absolute max is 4032 for newer ESP32xx types)
+static const size_t DUMMY_FLUSH_BYTES = MIN_FRAMES_PER_DMA_CHUNK * BYTES_PER_I2S_FRAME;
+
+static const uint32_t NEOPIXEL_I2S_TRANSMIT_TIMEOUT_MS = 1000;
+
 /*
 ---------------------------------------------------------------------------------------------------
     Interrupt callback for I2S transmission completion of one single DMA chunk
@@ -95,38 +95,72 @@ IRAM_ATTR bool NeopixelDriver<Mode>::onSentCallback(i2s_chan_handle_t handle, i2
 }
 #endif
 
+#if (ENABLE_I2S_TASK_VERSION)
 /*
-@@@@@@@@@@@@@@@@@@@@@@@
-bool IRAM_ATTR onI2SSent(
-    i2s_chan_handle_t handle,
-    i2s_event_data_t *event,
-    void *user_ctx)
-{
-    BaseType_t high_task_woken = pdFALSE;
-
-    xSemaphoreGiveFromISR(
-        (SemaphoreHandle_t)user_ctx,
-        &high_task_woken
-    );
-
-    return high_task_woken == pdTRUE;
-}
-@@@@@@@@@@
-{
-    BaseType_t high_task_woken = pdFALSE;
-
-    xTaskNotifyFromISR(
-        (TaskHandle_t)user_ctx,
-        EVT_SENT,
-        eSetBits,
-        &high_task_woken
-    );
-
-    return high_task_woken == pdTRUE;
-}
-@@@@@@@@@@@@@@@@@@@@@@@@
+===================================================================================================
+    Init the driver
+===================================================================================================
 */
+template <PixelType Mode>
+bool NeopixelDriver<Mode>::begin(const size_t arg_nrPixels, const gpio_num_t dataPin) {
+    uint32_t bitRate;
 
+    if (arg_nrPixels == 0) {
+        ESP_LOGE(TAG, "Number of pixels must be greater than zero");
+        return (false);
+    }
+
+    if constexpr (Mode == PixelType::GRB_SEQ3) {
+        //---------------------------------------
+        //  GRB, seq3 timing
+        //---------------------------------------
+        ESP_LOGI(TAG, "GRB Neopixels, seq3 timing");
+        txBytesPerColor = NEOPIXEL_SEQ3_BYTES_PER_COLOR; // seq3 encoding uses 3 bits per color bit, so 3 bytes per R/G/B color component
+        txBytesPerPixel = txBytesPerColor * 3;           // 3 color components (R, G, B), 9 bytes in total
+        bitRate = (800000UL * txBytesPerColor);          // Neopixel at 800kHz * 3 bits = 2.4 Mbps (417 ns/bit)
+    } else if constexpr (Mode == PixelType::GRBW_SEQ3) {
+        //---------------------------------------
+        //  GRBW, seq3 timing
+        //---------------------------------------
+        ESP_LOGI(TAG, "GRBW Neopixels, seq3 timing");
+        txBytesPerColor = NEOPIXEL_SEQ3_BYTES_PER_COLOR; // seq3 encoding uses 3 bits per color bit, so 3 bytes per R/G/B/W color component
+        txBytesPerPixel = txBytesPerColor * 4;           // 4 color components (R, G, B, W), 12 bytes in total
+        bitRate = (800000UL * txBytesPerColor);          // Neopixel at 800kHz * 3 bits = 2.4 Mbps (417 ns/bit)
+    } else if constexpr (Mode == PixelType::GRBW_SEQ4) {
+        //---------------------------------------
+        //  GRBW, seq4 timing
+        //---------------------------------------
+        ESP_LOGI(TAG, "GRBW Neopixels, seq4 timing");
+        txBytesPerColor = NEOPIXEL_SEQ4_BYTES_PER_COLOR; // seq4 encoding uses 4 bits per color bit, so 4 bytes per R/G/B color component
+        txBytesPerPixel = txBytesPerColor * 4;           // 4 color components (G, R, B, W), 16 bytes in total
+        bitRate = (800000UL * txBytesPerColor);          // Neopixel at 800kHz * 4 bits = 3.2 Mbps (312.5 ns/bit)
+    } else {
+        ESP_LOGE(TAG, "Unknown pixel type=%d", static_cast<int>(Mode));
+        return (false);
+    }
+
+    //---------------------------------------
+    //  Init the transmit control task,
+    //  and allocate the data buffer here.
+    //---------------------------------------
+    if (txControl.init(dataPin, bitRate, nrPixels, txBytesPerPixel, &bufferSize)) {
+        ESP_LOGI(TAG, "Started task for TX control");
+
+        buffer = (uint8_t *)malloc(bufferSize);
+        if (buffer == nullptr) {
+            ESP_LOGE(TAG, "Failed to allocate buffer of size %d bytes", bufferSize);
+            txControl.deinit(); // cleanup the task
+            return (false);
+        }
+        memset(buffer, 0, bufferSize); // esp. to ensure the unused bytes in last frame are zeroed
+    }
+
+    // Only now store the nrPixels
+    // (when it remains 0, it means begin() was not called successfully)
+    nrPixels = arg_nrPixels;
+    return (true);
+}
+#else
 /*
 ---------------------------------------------------------------------------------------------------
     Set the DMA configuration for the I2S peripheral to properly handle Neopixel data:
@@ -291,6 +325,7 @@ bool NeopixelDriver<Mode>::begin(const size_t arg_nrPixels, const gpio_num_t dat
 
     return (true);
 }
+#endif
 
 /*
 ===================================================================================================
@@ -303,10 +338,7 @@ template <PixelType Mode>
 bool NeopixelDriver<Mode>::show(void) {
 
 #if (ENABLE_I2S_TASK_VERSION)
-    int64_t startMicros = esp_timer_get_time();
-    int64_t endMicros; // @@@TODO: only needed below?
-
-    txControl.waitUntilReady();
+    txControl.startTransmit(buffer, bufferSize);
 #else
     //-------------------------------------------
     //  Prevent sending too frequently
@@ -321,7 +353,7 @@ bool NeopixelDriver<Mode>::show(void) {
         vTaskDelay(pdMS_TO_TICKS(1));       // 1 ms
         startMicros = esp_timer_get_time(); // do not include this delay in the write timing calculation
     } // else: sufficient time has passed since the previous end time
-#endif
+
     //-------------------------------------------
     //  Preload the data into I2S
     //-------------------------------------------
@@ -352,20 +384,12 @@ bool NeopixelDriver<Mode>::show(void) {
             }
         }
     }
-
-#if (ENABLE_I2S_TASK_VERSION == 0)
     sentNrChunks = 0;
-#endif
 
     //-------------------------------------------
     //  Enable the channel,
     //  this will start sending to the Neopixels
     //-------------------------------------------
-
-#if (ENABLE_I2S_TASK_VERSION)
-    txControl.startTransmit();
-#else
-
 #if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE)
     hal.setNeoPixelEnable(true); // enable the data output
 #endif
@@ -404,7 +428,6 @@ bool NeopixelDriver<Mode>::show(void) {
     hal.setNeoPixelEnable(false); // disable the data output
 #endif
 
-#endif
     //-------------------------------------------
     //  Measure elapsed time
     //  (also to prevent sending too frequently)
@@ -415,7 +438,7 @@ bool NeopixelDriver<Mode>::show(void) {
         stats.maxSendMicros = writeMicros;
         ESP_LOGI(TAG, "maxSendMicros=%lld", stats.maxSendMicros); //@@@TODO: remove, show statistics on request
     }
-
+#endif
     return (true); // @@@TODO: return value should indicate if the data has been sent or not, but for now always return true
 }
 

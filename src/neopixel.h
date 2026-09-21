@@ -16,7 +16,7 @@
 #define ENABLE_I2S_TASK_VERSION 0
 
 #if (ENABLE_I2S_TASK_VERSION)
-#include "neopixel_task.h"
+#include "neopixel_i2s.h"
 #else
 // Enable or disable output at every write to the Neopixels, for scope triggering on the Enable signal
 //@@@TODO: remove, enable/disable should be done outside of this driver
@@ -134,24 +134,31 @@ class NeopixelDriver {
     }
 
 #if (ENABLE_I2S_TASK_VERSION)
-    friend class NeopixelTransmitControl; // allow NeopixelTransmitControl to access private members of NeopixelDriver
+    friend class NeopixelTransmitControl; // allow this other class to access private members here
 #endif
 
   public:
     // Global brightness (min=0...max=255)
     uint8_t brightness = 255;
 
+#if (ENABLE_I2S_TASK_VERSION)
+    struct NeopixelTransmitControl::NeopixelStatistics *txControlStats = &txControl.stats;
+#else
     struct NeopixelStatistics {
         int64_t maxSendMicros;
         uint32_t maxNrChunksSent;
         //@@@TODO: add some error counters (e.g., for DMA transfer failures)
     } stats = {};
-
+#endif
     NeopixelDriver(void) {} // empty, use begin() to initialize the driver
 
     ~NeopixelDriver(void) {
         //@@@TODO: add delay?
+#if (ENABLE_I2S_TASK_VERSION)
+        txControl.deinit();
+#else
         i2s_del_channel(i2s);
+#endif
         if (buffer != nullptr) {
             free(buffer);
         }

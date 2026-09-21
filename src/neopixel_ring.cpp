@@ -77,8 +77,14 @@ void statistics(unsigned long currentMillis) {
 
     // Used chunks
     static int reportedMaxChunksSent = 0;
+#if (ENABLE_I2S_TASK_VERSION)
+    if (npx.txControlStats->maxNrChunksSent > reportedMaxChunksSent) {
+        reportedMaxChunksSent = npx.txControlStats->maxNrChunksSent;
+#else
     if (npx.stats.maxNrChunksSent > reportedMaxChunksSent) {
         reportedMaxChunksSent = npx.stats.maxNrChunksSent;
+#endif
+
         ESP_LOGI(TAG, "maxNrChunksSent=%d", reportedMaxChunksSent);
     }
 }
