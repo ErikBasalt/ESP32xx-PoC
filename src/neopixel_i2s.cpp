@@ -167,7 +167,7 @@ bool NeopixelTransmitControl::init(
     // Let's go
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &i2s, nullptr)); // create TX channel only (no RX)
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(i2s, &std_cfg));  // initialize it
-    ESP_LOGI(TAG, "I2S channel id=%d, interrupt priority=%d", chan_cfg.id, chan_cfg.intr_priority);
+    ESP_LOGI(TAG, "I2S interrupt priority=%d", chan_cfg.intr_priority);
 
     i2s_event_callbacks_t callbacks = {
         .on_recv = nullptr,
@@ -179,7 +179,7 @@ bool NeopixelTransmitControl::init(
 
     i2s_chan_info_t chan_info;
     i2s_channel_get_info(i2s, &chan_info);
-    ESP_LOGI(TAG, "I2S total DMA buffer size=%u", chan_info.total_dma_buf_size);
+    ESP_LOGI(TAG, "I2S channel=%d, total DMA buffer size=%u", chan_info.id, chan_info.total_dma_buf_size);
 
 #if (ENABLE_I2S_TASK_VERSION)
     UBaseType_t priority = uxTaskPriorityGet(NULL); // Parent task (this) priority
