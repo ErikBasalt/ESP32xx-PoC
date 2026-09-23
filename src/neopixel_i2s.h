@@ -11,52 +11,73 @@
 #include <driver/i2s_std.h>
 #include <driver/i2s_common.h>
 
+// Enable or disable using a separate RTOS task to wait for I2S transmission completion
+#define ENABLE_I2S_TASK_VERSION 1
+
 #define NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE 1
 
+#if (SOC_I2S_HW_VERSION_1)
+// NOTE: !! VSC is not aware of this define, therefore syntax highlighting does NOT work here !!
+
+//-------------------------------------------------------------------
+// SOC_I2S_HW_VERSION_1 chip (the original ESP32 and ESP32-S2)
+//-------------------------------------------------------------------
+
+// There is no simple big_endian boolean flag in the I2S configuration struct
+// The hardware architecture inherently expects data to be fed into the FIFO in Little-Endian format
+// The software (here) must handle any necessary byte swapping for big-endian data.
+#define NEOPIXEL_ENABLE_BIG_ENDIAN 0
+#else
+//-------------------------------------------------------------------
+// SOC_I2S_HW_VERSION_2 chip (ESP32-S3 and later, incl C3 and C6)
+//-------------------------------------------------------------------
+// I2S hardware can handle big-endian mode directly
+#define NEOPIXEL_ENABLE_BIG_ENDIAN 1
+#endif
 /*
 ---------------------------------------------------------------------------------------------------
     Interface to Task that controls the transmission of Neopixel data via I2S
 ---------------------------------------------------------------------------------------------------
  */
-#define NEOPIXEL_TASK_PRIORITY (configMAX_PRIORITIES - 1) //@@@TODO: check
+struct NeopixelTransmitStatistics {
+#if (ENABLE_I2S_TASK_VERSION)
+    UBaseType_t minimumFreeStack = 0; // minimum free stack [bytes] of this Task
+    uint32_t nrOverruns;              // number of times transmit command is given while Task is not Ready yet
+#endif
+    int64_t maxSendMicros;
+    uint32_t maxNrChunksSent;
+    //@@@TODO: add some error counters (e.g., for DMA transfer failures)
+};
 
 class NeopixelTransmitControl {
   private:
-    // Neopixel config
-    // size_t txBytesPerColor; // number of bytes to be sent per R/G/B/(W) color component, depends on seq3/seq4 timing
-    // size_t txBytesPerPixel; // number of bytes per Neopixel (all colors)
-
-    // Data size
-    // size_t nrPixels = 0; // number of Neopixels to drive
-    // uint8_t *buffer = nullptr; // data buffer to be sent to the Neopixels
-    // size_t bufferSize = 0; // [bytes]
-
-    // Notifications
-    TaskHandle_t parentTaskHandle = xTaskGetCurrentTaskHandle(); // RTOS handle to the parent task, used by Task to send responses
-    TaskHandle_t transmitTaskHandle = nullptr;                   // RTOS handle to newly created Task itself, used by Parent to send commands
+    // For the Notifications
+    TaskHandle_t parentTaskHandle = nullptr; // RTOS handle to the parent task, for sending response Notifications to
+#if (ENABLE_I2S_TASK_VERSION)
+    TaskHandle_t transmitTaskHandle = nullptr; // RTOS handle to trasnmit Task, for sending command Notifications to
+#endif
 
     // I2S channel to use
     i2s_chan_handle_t i2s = nullptr;
 
     // Housekeeping
-    UBaseType_t minimumFreeStack = 0; // minimum free stack [bytes] of this Task
-
     int totalNrChunks; // total number of DMA chunks (descriptors) to send at each transmission
     int sentNrChunks;  // actual number of chunks (being) sent, used for tracking the transmit progress
 
-    // Function declarations
-    static void transmitTask(void *here);                                                                        // in cpp, function for the RTOS Task, needs to be static and have pointer to the instance
+    // Statistics, stored externally
+    struct NeopixelTransmitStatistics *statsPtr = nullptr;
+
+    // Functions
+#if (ENABLE_I2S_TASK_VERSION)
+    static void transmitTask(void *here); // in cpp, function for the RTOS Task, needs to be static and have pointer to the instance
+#else
+    void transmitNoTask(void);
+#endif
     static IRAM_ATTR bool onSentCallback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *classContext); // in cpp, function for the sent callback, needs to be static
 
   public:
-    struct NeopixelStatistics {
-        int64_t maxSendMicros;
-        uint32_t maxNrChunksSent;
-        uint32_t nrOverruns = 0; // number of times transmit command is given while not Ready yet, use waitUntilReady() to avoid overruns
-        //@@@TODO: add some error counters (e.g., for DMA transfer failures)
-    } stats = {};
-
-    NeopixelTransmitControl(void) = default;
+    NeopixelTransmitControl(NeopixelTransmitStatistics *arg_statsPtr) : statsPtr(arg_statsPtr) {
+    }
 
     ~NeopixelTransmitControl(void) {
         deinit();

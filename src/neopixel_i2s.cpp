@@ -8,11 +8,15 @@
 */
 #include "neopixel_i2s.h"
 
+// Enable or disable output at every write to the Neopixels, for scope triggering on the Enable signal
+//@@@TODO: remove, enable/disable should be done outside of this driver
+#define NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE 1
+
 #if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE)
 #include "hal.h"
 #endif
 
-#define TAG "NI2S"
+#define TAG "I2S_"
 
 // Minimum and maximum size of one single DMA chunk
 // Ensure yourself that calculated MIN and MAX values are integers (no fractions)
@@ -31,6 +35,29 @@ constexpr uint32_t EVT_SENT = 1 << 2;     // Event (from sent callback) indicati
 // Notification responses from Task to Main
 constexpr uint32_t RSP_READY = 1 << 0;   // I2S driver is in Ready state, new data can be preloaded and then transmitted
 constexpr uint32_t RSP_STOPPED = 1 << 1; // Shutdown complete
+
+/*
+---------------------------------------------------------------------------------------------------
+    Helper to wait for a specific notification
+---------------------------------------------------------------------------------------------------
+*/
+static bool waitForNotification(uint32_t expectedNotification) {
+    uint32_t notification;
+
+    for (int i = 0; i < 2; i++) {
+        xTaskNotifyWait(
+            0,                 // keep all bits on entry
+            UINT32_MAX,        // clear all bits on exit
+            &notification,     // the response from Task
+            pdMS_TO_TICKS(500) // wait max 2*500=1000ms, should be enough for more than 10000 Neopixels
+        );
+
+        if (notification & expectedNotification) {
+            return (true); // Received expected Notification
+        } // else: clear and ignore other Notifications and wait longer
+    }
+    return (false); // timeout
+};
 
 /*
 ---------------------------------------------------------------------------------------------------
@@ -83,6 +110,11 @@ bool NeopixelTransmitControl::init(gpio_num_t dataPin, uint32_t bitRate, size_t 
         return (false);
     }
 
+    // Store the RTOS handle to parent task, for sending Notifications to
+    // This CANNOT be done in the constructor, when the task is not active yet
+    parentTaskHandle = xTaskGetCurrentTaskHandle();
+
+    // Configure I2S
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
 
     i2s_std_config_t std_cfg = {
@@ -111,12 +143,14 @@ bool NeopixelTransmitControl::init(gpio_num_t dataPin, uint32_t bitRate, size_t 
 #endif
 
     // Define buffer and DMA sizes
-    size_t bufferSize = nrPixels * txBytesPerPixel;
+    size_t bufferSize = nrPixels * txBytesPerPixel; //@@@TODO: or should caller calculate this, and pass as "rawDataSize" argument?
     ESP_LOGI(TAG, "nrPixels=%d, txBytesPerPixel=%d, raw buffer size=%d bytes, bitRate=%d bps", nrPixels, txBytesPerPixel, bufferSize, bitRate);
 
     setDMAconfig(bufferSize, &chan_cfg); // NOTE: bufferSize called by reference, it can be increased
 
     ESP_LOGI(TAG, "Optimised buffer size=%d bytes, frames/chunk=%d, bytes/frame=%d, DMA chunks=%d", bufferSize, chan_cfg.dma_frame_num, BYTES_PER_I2S_FRAME, chan_cfg.dma_desc_num);
+    totalNrChunks = chan_cfg.dma_desc_num; // to check in callback if all chunks have been sent
+    *requiredBufferSizePtr = bufferSize;   // for caller to allocate buffer
 
     // Calculate speed
     std_cfg.clk_cfg.sample_rate_hz = bitRate / (BYTES_PER_I2S_FRAME * 8); // frames per sec
@@ -137,45 +171,60 @@ bool NeopixelTransmitControl::init(gpio_num_t dataPin, uint32_t bitRate, size_t 
     };
     ESP_ERROR_CHECK(i2s_channel_register_event_callback(i2s, &callbacks, this));
 
-    ESP_LOGI(TAG, "Use RTOS task for TX control");
+    i2s_chan_info_t chan_info;
+    i2s_channel_get_info(i2s, &chan_info);
+    ESP_LOGI(TAG, "I2S total DMA buffer size=%u", chan_info.total_dma_buf_size);
+
+#if (ENABLE_I2S_TASK_VERSION)
+    UBaseType_t priority = uxTaskPriorityGet(NULL); // Parent task (this) priority
+    if (priority < (configMAX_PRIORITIES / 2)) {
+        priority++; // Task prio is 1 higher
+    } // else: Already at very high prio, have Task at same
+
+    BaseType_t core = xPortGetCoreID(); // run Task on same core as Parent, for fastest Notifications
+
+    ESP_LOGI(TAG, "Starting TX control Task on core=%u, priority=%u", core, priority);
+
     if (xTaskCreatePinnedToCore(
-            transmitTask,        // Task function
-            "transmitTask",      // Task name
-            10000,               // stack size (bytes)     @@@@TODO: reduce stack (current usage is only 404 bytes) 31dec24: min=1644 !? door logging tijdens skippen van een puls?
-            this,                // Task parameter: reference to this class instance
-            2,                   // priority is just above the normal program   //@@@TODO
-            &transmitTaskHandle, // Task handle
-            1) != pdPASS) {      // which core to run on (0=system, 1=app)  //@@@TODO: why pinned to core?
-        ESP_LOGE(TAG, "Failed to create transmit task");
+            transmitTask, // Task function to run
+            "NeopixelTX", // Task name in RTOS
+            500,          // stack size (bytes), 23sep26: max usage is 320 bytes
+            this,         // Task parameter: reference to this Parent class instance
+            priority,
+            &transmitTaskHandle, // created Task handle
+            core) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create task");
         return (false);
     }
+#else
+    ESP_LOGI(TAG, "No task");
+#endif
     return (true);
 }
 
+/*
+===================================================================================================
+    De-init the I2S
+===================================================================================================
+*/
 void NeopixelTransmitControl::deinit(void) {
-    uint32_t response;
-
-    // Tell Task to shutdown
-    xTaskNotify(transmitTaskHandle, CMD_SHUTDOWN, eSetBits);
-
-    // Wait for feedback from Task
-    for (int i = 0; i < 100; i++) {
-        xTaskNotifyWait(
-            0,                // keep all bits on entry
-            UINT32_MAX,       // clear all bits on exit
-            &response,        // the response from Task
-            pdMS_TO_TICKS(10) // wait max 10ms
-        );
-
-        if (response & RSP_STOPPED) {
-            i2s_del_channel(i2s);
-            return;
-        } // else: wait and ignore other responses (eg from previous transmit command)
+#if (ENABLE_I2S_TASK_VERSION)
+    TaskHandle_t tmpHandle = transmitTaskHandle; // Use a temporary handle to safely delete the task (and not ourself)
+    if (tmpHandle) {
+        // Tell Task to shutdown
+        xTaskNotify(transmitTaskHandle, CMD_SHUTDOWN, eSetBits);
+        if (!waitForNotification(RSP_STOPPED)) {
+            ESP_LOGW(TAG, "Transmit task did not respond to shutdown command, killing it");
+            tmpHandle = transmitTaskHandle; // check once again
+            if (tmpHandle) {
+                vTaskDelete(tmpHandle);
+                transmitTaskHandle = nullptr;
+            } // else: Task was stopped anyway
+        }
     }
-
-    // Task did not respond, kill it from here
-    vTaskDelete(transmitTaskHandle);
-    i2s_del_channel(i2s); // @@@TODO: DRY
+#endif
+    i2s_del_channel(i2s);
+    i2s = nullptr;
 }
 
 /*
@@ -192,20 +241,25 @@ IRAM_ATTR bool NeopixelTransmitControl::onSentCallback(i2s_chan_handle_t handle,
     BaseType_t higherPrioTaskWakeup = pdFALSE;
 
     c->sentNrChunks++;
-    if (c->sentNrChunks > c->stats.maxNrChunksSent) {
+    if (c->sentNrChunks > c->statsPtr->maxNrChunksSent) {
         // Sometimes the driver cannot stop immediately and repeats the last DMA chunk at the end of the transmission,
         // leading to more chunks being sent than the raw Neopixel data requires
         // Since the last chunk is the dummy flush with all zeros this does not hurt,
         // this statistic only tracks the occurrence.
-        c->stats.maxNrChunksSent = c->sentNrChunks;
+        c->statsPtr->maxNrChunksSent = c->sentNrChunks;
     }
 
     if (c->sentNrChunks == c->totalNrChunks) {
         // All Neopixel DMA chunks (incl dummy flush) have been sent, signal the waiting task it can continue now
 
-        // Npotofy the transmit Task
+        // Notify the Task that initiated the transmission
+        //@@@TODO: check if the task handle != nullptr? might happen in deinit() when transmitting is still ongoing
         xTaskNotifyFromISR(
+#if (ENABLE_I2S_TASK_VERSION)
             c->transmitTaskHandle,
+#else
+            c->parentTaskHandle,
+#endif
             EVT_SENT,
             eSetBits,
             &higherPrioTaskWakeup);
@@ -222,83 +276,77 @@ IRAM_ATTR bool NeopixelTransmitControl::onSentCallback(i2s_chan_handle_t handle,
     Use the same bufferSize here.
 ===================================================================================================
 */
+#define NEOPIXEL_MINIMUM_INTERVAL_US (1000)
+
 void NeopixelTransmitControl::startTransmit(uint8_t *buffer, size_t bufferSize) {
 
-    //---------------------------------------------------
-    //  Lambda function to wait until Task is ready for new transmit
-    //---------------------------------------------------
-    auto waitUntilReady = [&](void) {
-        uint32_t response;
-
-        for (int i = 0; i < 10; i++) {
-            xTaskNotifyWait(
-                0,                 // keep all bits on entry
-                UINT32_MAX,        // clear all bits on exit
-                &response,         // the response from Task
-                pdMS_TO_TICKS(100) // wait max 10*100=1000ms, should be enough for more than 10000 Neopixels
-            );
-
-            if (response & RSP_READY) {
-                return (true);
-            } // else: wait and ignore other responses (eg from previous transmit command)
-        }
-        return (false); // timeout
-    };
-
+    static int64_t endMicros = 0 - NEOPIXEL_MINIMUM_INTERVAL_US;
     int64_t startMicros = esp_timer_get_time();
 
+#if (ENABLE_I2S_TASK_VERSION)
     //-------------------------------------------
-    //  Wait until ready
+    //  Wait until Task is Ready
     //-------------------------------------------
-    if (!waitUntilReady()) {
+    if (!waitForNotification(RSP_READY)) {
         // Timeout waiting for the I2S Task to become ready
         return;
     }
+#else
+    if (startMicros < (endMicros + NEOPIXEL_MINIMUM_INTERVAL_US)) {
+        // After Disable, the I2S driver needs some time to cleanup before the next data transfer
+        // Without this delay and driving just 1 Neopixel at full speed, after some time ESP32-C3 will show extra green pixel and may even crash (RTC_SW_CPU_RST)
+        // Implicitly, this delay also ensures the Reset timing for Neopixels (some types require >=280 us)
+        vTaskDelay(pdMS_TO_TICKS(1));       // 1 ms
+        startMicros = esp_timer_get_time(); // do not include this delay in the write timing calculation
+    } // else: sufficient time has passed since the previous end time
+#endif
 
     //-------------------------------------------
     //  Preload the data into I2S
     //-------------------------------------------
     size_t bytesLoaded = 0;
-    esp_err_t rv = i2s_channel_preload_data(i2s, buffer, bufferSize, &bytesLoaded);
-    if (rv != ESP_OK) {
-        // Never happens
-        ESP_LOGE(TAG, "i2s_channel_preload_data() failed: rv=%d", rv);
-    } else {
+    if (i2s_channel_preload_data(i2s, buffer, bufferSize, &bytesLoaded) == ESP_OK) {
         if (bytesLoaded != bufferSize) {
-            // Never happens
-            ESP_LOGE(TAG, "i2s_channel_preload_data() incomplete: bytesLoaded=%d", bytesLoaded);
+            ESP_LOGE(TAG, "i2s_channel_preload_data() of buffer incomplete: bytesLoaded=%d", bytesLoaded); // Never happened
+            return;
         }
+    } else {
+        ESP_LOGE(TAG, "i2s_channel_preload_data() of buffer failed"); // Never happened
+        return;
+    }
 
-        // Add dummy flush DMA chunk, that can be retransmitted without any harm while the I2S channel is finalising
-        // 1 frame of 4 bytes seem to be working already, using some more to be sure
-        // If necessary, the I2S driver will pad this DMA chunk with zeros to match the Neopixel chunk sizes
-        static const uint8_t dummy_flush[DUMMY_FLUSH_BYTES] = {}; // initialise with all zeros
-
-        rv = i2s_channel_preload_data(i2s, dummy_flush, sizeof(dummy_flush), &bytesLoaded);
-        if (rv != ESP_OK) {
-            // Never happens
-            ESP_LOGE(TAG, "i2s_channel_preload_data() of DUMMY flush failed: rv=%d", rv);
-        } else {
-            if (bytesLoaded != sizeof(dummy_flush)) {
-                // Never happens
-                ESP_LOGE(TAG, "i2s_channel_preload_data() incomplete: bytesLoaded=%d", bytesLoaded);
-            }
+    // Add dummy flush DMA chunk, that can be retransmitted without any harm while the I2S channel is finalising
+    // 1 frame of 4 bytes seem to be working already, using some more to be sure
+    // If necessary, the I2S driver will pad this DMA chunk with zeros to match the Neopixel chunk sizes
+    static const uint8_t dummy_flush[DUMMY_FLUSH_BYTES] = {}; // initialise with all zeros
+    if (i2s_channel_preload_data(i2s, dummy_flush, sizeof(dummy_flush), &bytesLoaded) == ESP_OK) {
+        if (bytesLoaded != sizeof(dummy_flush)) {
+            ESP_LOGE(TAG, "i2s_channel_preload_data() of dummy flush incomplete: bytesLoaded=%d", bytesLoaded); // Never happened
+            return;
         }
+    } else {
+        ESP_LOGE(TAG, "i2s_channel_preload_data() of dummy flush failed"); // Never happened
+        return;
+    }
 
-        //-------------------------------------------
-        //  Start Transmit
-        //-------------------------------------------
-        xTaskNotify(transmitTaskHandle, CMD_TRANSMIT, eSetBits);
+    //-------------------------------------------
+    //  Start the actual data transmission
+    //-------------------------------------------
+#if (ENABLE_I2S_TASK_VERSION)
+    xTaskNotify(transmitTaskHandle, CMD_TRANSMIT, eSetBits);
+#else
+    transmitNoTask();
+#endif
 
-        int64_t endMicros = esp_timer_get_time();
-        int64_t writeMicros = endMicros - startMicros;
-        if (writeMicros > stats.maxSendMicros) {
-            stats.maxSendMicros = writeMicros;
-            ESP_LOGI(TAG, "maxSendMicros=%lld", stats.maxSendMicros); //@@@TODO: remove, show statistics on request
-        }
+    endMicros = esp_timer_get_time();
+    int64_t deltaMicros = endMicros - startMicros;
+    if (deltaMicros > statsPtr->maxSendMicros) {
+        statsPtr->maxSendMicros = deltaMicros;
+        ESP_LOGI(TAG, "maxSendMicros=%lld", statsPtr->maxSendMicros); //@@@TODO: remove, show statistics on request
     }
 }
 
+#if (ENABLE_I2S_TASK_VERSION)
 /*
 ***************************************************************************************************
     Task to start sending the preloaded data and wait for completion
@@ -308,8 +356,8 @@ void NeopixelTransmitControl::startTransmit(uint8_t *buffer, size_t bufferSize) 
 ***************************************************************************************************
 */
 void NeopixelTransmitControl::transmitTask(void *taskArg) {
-    NeopixelTransmitControl *here = (NeopixelTransmitControl *)taskArg; // pointer to class instance that started this task
-    here->minimumFreeStack = uxTaskGetStackHighWaterMark(NULL);         // init Task stack usage
+    NeopixelTransmitControl *here = (NeopixelTransmitControl *)taskArg;   // pointer to class instance that started this task
+    here->statsPtr->minimumFreeStack = uxTaskGetStackHighWaterMark(NULL); // init Task stack usage
 
     // TASKLOG("Starting i2sTask"); // NOTE: this will NOT work when logging at main task is not active yet
 
@@ -328,6 +376,18 @@ void NeopixelTransmitControl::transmitTask(void *taskArg) {
         vTaskDelete(nullptr);               // kill this task
         // No code should be executed after this
     };
+
+    //---------------------------------------------------
+    //  Lambda function to notify parent
+    //  that this task is ready
+    //---------------------------------------------------
+    auto notifyReady = [&](void) {
+        xTaskNotify(here->parentTaskHandle,
+                    RSP_READY,
+                    eSetBits);
+    };
+
+    notifyReady(); // initial notification to parent that this task is Ready
 
     //---------------------------------------------------
     //  Enter the infinite Task loop
@@ -375,7 +435,7 @@ void NeopixelTransmitControl::transmitTask(void *taskArg) {
             } else {
                 // Transmit overrun, caller should have waited for RSP_READY before issuing a new CMD_TRANSMIT
                 // This new transmit command will be ignored
-                here->stats.nrOverruns++;
+                here->statsPtr->nrOverruns++;
             }
         }
 
@@ -399,16 +459,62 @@ void NeopixelTransmitControl::transmitTask(void *taskArg) {
                 isTxRunning = false;
 
                 // Notify parent
-                xTaskNotify(here->parentTaskHandle,
-                            RSP_READY,
-                            eSetBits);
+                notifyReady();
             }
         }
 
         // Update Task stack usage
         UBaseType_t currentFreeStack = uxTaskGetStackHighWaterMark(NULL);
-        if (currentFreeStack < here->minimumFreeStack) {
-            here->minimumFreeStack = currentFreeStack;
+        if (currentFreeStack < here->statsPtr->minimumFreeStack) {
+            here->statsPtr->minimumFreeStack = currentFreeStack;
         }
     }
 }
+#else
+/*
+---------------------------------------------------------------------------------------------------
+    Transmit Neopixel data immediately without using a separate RTOS task.
+---------------------------------------------------------------------------------------------------
+*/
+void NeopixelTransmitControl::transmitNoTask(void) {
+    sentNrChunks = 0;
+
+    //-------------------------------------------
+    //  Enable the channel,
+    //  this will start sending to the Neopixels
+    //-------------------------------------------
+#if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE)
+    hal.setNeoPixelEnable(true); // enable the data output
+#endif
+    {
+        esp_err_t rv;
+        rv = i2s_channel_enable(i2s);
+        if (rv != ESP_OK) {
+            // Never happens
+            ESP_LOGE(TAG, "i2s_channel_enable() failed: rv=%d", rv);
+        }
+    }
+
+    if (!waitForNotification(EVT_SENT)) {
+        ESP_LOGE(TAG, "Timeout waiting until all DMA Chunks have been sent");
+        // Continue anyway, even if timeout occurred
+    }
+
+    //-------------------------------------------
+    //  Disable the channel,
+    //  to ensure I2S really stops sending
+    //-------------------------------------------
+    {
+        esp_err_t rv;
+        rv = i2s_channel_disable(i2s);
+        if (rv != ESP_OK) {
+            // Never happens
+            ESP_LOGE(TAG, "i2s_channel_disable() failed: rv=%d", rv);
+        }
+    }
+
+#if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE)
+    hal.setNeoPixelEnable(false); // disable the data output
+#endif
+}
+#endif

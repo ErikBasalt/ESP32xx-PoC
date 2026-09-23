@@ -77,16 +77,19 @@ void statistics(unsigned long currentMillis) {
 
     // Used chunks
     static int reportedMaxChunksSent = 0;
-#if (ENABLE_I2S_TASK_VERSION)
-    if (npx.txControlStats->maxNrChunksSent > reportedMaxChunksSent) {
-        reportedMaxChunksSent = npx.txControlStats->maxNrChunksSent;
-#else
     if (npx.stats.maxNrChunksSent > reportedMaxChunksSent) {
         reportedMaxChunksSent = npx.stats.maxNrChunksSent;
-#endif
-
         ESP_LOGI(TAG, "maxNrChunksSent=%d", reportedMaxChunksSent);
     }
+
+#if (ENABLE_I2S_TASK_VERSION)
+    // Used Task stack
+    static UBaseType_t reportedMinFreeTaskStack = UINT_MAX;
+    if (npx.stats.minimumFreeStack < reportedMinFreeTaskStack) {
+        reportedMinFreeTaskStack = npx.stats.minimumFreeStack;
+        ESP_LOGI(TAG, "minimumFreeStack=%u", reportedMinFreeTaskStack);
+    }
+#endif
 }
 
 void animateSinglePixel(unsigned long currentMillis) {
@@ -125,16 +128,16 @@ void movingPixel(unsigned long currentMillis) {
     npx.setPixel(blackIndex, neopixelBlack);     // erase previously colored pixel
     npx.setPixel(coloredIndex, neopixelColored); // set new colored pixel
 
-    if (npx.show()) { // send the data to the Neopixel ring
-        // Update the pixel indexes for the next iteration
-        blackIndex = coloredIndex;
-        if (++coloredIndex >= PIXEL_COUNT) {
-            // New loop
-            coloredIndex = 0;
+    npx.show();
 
-            statistics(currentMillis);
-        }
-    } // else: busy, try again later
+    // Update the pixel indexes for the next iteration
+    blackIndex = coloredIndex;
+    if (++coloredIndex >= PIXEL_COUNT) {
+        // New loop
+        coloredIndex = 0;
+
+        statistics(currentMillis);
+    }
 }
 
 uint16_t readPoti(void) {
