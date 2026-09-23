@@ -68,9 +68,10 @@ static bool waitForNotification(uint32_t expectedNotification) {
     - (try to) Prevent I2S driver from repeating the last DMA chunk, not sure if this always works
 ---------------------------------------------------------------------------------------------------
 */
-static void setDMAconfig(size_t &neopixelBufferSize, // [bytes]. When called: just the Neopixel data size. On return: adjusted to actual number of bytes to be transmitted with I2S.
-                         i2s_chan_config_t *cfg)     // DMA channel configuration to be set for the I2S peripheral
-{
+static void setDMAconfig(
+    size_t &neopixelBufferSize, // [bytes]. When called: just the Neopixel data size. On return: adjusted to actual number of bytes to be transmitted with I2S.
+    i2s_chan_config_t *cfg) {   // DMA channel configuration to be set for the I2S peripheral
+
     // Required number of frames to contain all the Neopixel data (rounded up)
     uint32_t totalNrFrames = (neopixelBufferSize + BYTES_PER_I2S_FRAME - 1) / BYTES_PER_I2S_FRAME;
 
@@ -99,9 +100,14 @@ static void setDMAconfig(size_t &neopixelBufferSize, // [bytes]. When called: ju
     Init the I2S
 ===================================================================================================
 */
-bool NeopixelTransmitControl::init(gpio_num_t dataPin, uint32_t bitRate, size_t nrPixels, size_t txBytesPerPixel, size_t *requiredBufferSizePtr) {
-    if (nrPixels == 0) {
-        ESP_LOGE(TAG, "Number of pixels must be greater than zero");
+bool NeopixelTransmitControl::init(
+    gpio_num_t dataPin,              // GPIO pin used for the I2S data output
+    uint32_t bitRate,                // [bps] bit rate for the I2S transmission
+    size_t rawDataSize,              // [bytes] size of the raw Neopixel data
+    size_t *requiredBufferSizePtr) { // pointer to store the required buffer size [bytes] for the I2S transmission
+
+    if (rawDataSize == 0) {
+        ESP_LOGE(TAG, "Raw data size must be greater than zero");
         return (false);
     }
 
@@ -143,9 +149,9 @@ bool NeopixelTransmitControl::init(gpio_num_t dataPin, uint32_t bitRate, size_t 
 #endif
 
     // Define buffer and DMA sizes
-    size_t bufferSize = nrPixels * txBytesPerPixel; //@@@TODO: or should caller calculate this, and pass as "rawDataSize" argument?
-    ESP_LOGI(TAG, "nrPixels=%d, txBytesPerPixel=%d, raw buffer size=%d bytes, bitRate=%d bps", nrPixels, txBytesPerPixel, bufferSize, bitRate);
+    ESP_LOGI(TAG, "Raw data size=%u bytes, bitRate=%d bps", rawDataSize, bitRate);
 
+    size_t bufferSize = rawDataSize;
     setDMAconfig(bufferSize, &chan_cfg); // NOTE: bufferSize called by reference, it can be increased
 
     ESP_LOGI(TAG, "Optimised buffer size=%d bytes, frames/chunk=%d, bytes/frame=%d, DMA chunks=%d", bufferSize, chan_cfg.dma_frame_num, BYTES_PER_I2S_FRAME, chan_cfg.dma_desc_num);
@@ -188,7 +194,7 @@ bool NeopixelTransmitControl::init(gpio_num_t dataPin, uint32_t bitRate, size_t 
     if (xTaskCreatePinnedToCore(
             transmitTask, // Task function to run
             "NeopixelTX", // Task name in RTOS
-            500,          // stack size (bytes), 23sep26: max usage is 320 bytes
+            1000,         // [bytes] stack size, 23sep26: max usage on ESP32=552 bytes, S3=772 (!), C3=320, C6=296
             this,         // Task parameter: reference to this Parent class instance
             priority,
             &transmitTaskHandle, // created Task handle
@@ -213,7 +219,9 @@ void NeopixelTransmitControl::deinit(void) {
     if (tmpHandle) {
         // Tell Task to shutdown
         xTaskNotify(transmitTaskHandle, CMD_SHUTDOWN, eSetBits);
-        if (!waitForNotification(RSP_STOPPED)) {
+        if (waitForNotification(RSP_STOPPED)) {
+            ESP_LOGI(TAG, "Transmit task stopped successfully");
+        } else {
             ESP_LOGW(TAG, "Transmit task did not respond to shutdown command, killing it");
             tmpHandle = transmitTaskHandle; // check once again
             if (tmpHandle) {
@@ -231,14 +239,18 @@ void NeopixelTransmitControl::deinit(void) {
 ---------------------------------------------------------------------------------------------------
     Interrupt callback for I2S transmission completion of one single DMA chunk
 
-    Per Neopixel transmission, two or more multiple DMA chunks are used:
+    Per Neopixel transmission, two or more DMA chunks are used:
     - one (or more) for the raw Neopixel data
     - one for the dummy flush with all zeros
 ---------------------------------------------------------------------------------------------------
 */
-IRAM_ATTR bool NeopixelTransmitControl::onSentCallback(i2s_chan_handle_t handle, i2s_event_data_t *event, void *classContext) {
-    auto *c = (NeopixelTransmitControl *)classContext;
-    BaseType_t higherPrioTaskWakeup = pdFALSE;
+IRAM_ATTR bool NeopixelTransmitControl::onSentCallback(
+    i2s_chan_handle_t handle, // the I2S channel handle that triggered the callback
+    i2s_event_data_t *event,  // event data associated with the I2S transmission
+    void *initiatorContext) { // pointer to the context of the transmit initiator
+
+    auto *c = (NeopixelTransmitControl *)initiatorContext;
+    BaseType_t higherPrioTaskWoken = pdFALSE;
 
     c->sentNrChunks++;
     if (c->sentNrChunks > c->statsPtr->maxNrChunksSent) {
@@ -262,9 +274,9 @@ IRAM_ATTR bool NeopixelTransmitControl::onSentCallback(i2s_chan_handle_t handle,
 #endif
             EVT_SENT,
             eSetBits,
-            &higherPrioTaskWakeup);
+            &higherPrioTaskWoken);
     }
-    return (higherPrioTaskWakeup == pdTRUE);
+    return (higherPrioTaskWoken == pdTRUE);
 }
 
 /*
@@ -278,7 +290,9 @@ IRAM_ATTR bool NeopixelTransmitControl::onSentCallback(i2s_chan_handle_t handle,
 */
 #define NEOPIXEL_MINIMUM_INTERVAL_US (1000)
 
-void NeopixelTransmitControl::startTransmit(uint8_t *buffer, size_t bufferSize) {
+void NeopixelTransmitControl::startTransmit(
+    uint8_t *buffer,     // pointer to the data buffer containing the Neopixel data
+    size_t bufferSize) { // size of the buffer [bytes], should match the bufferSize determined at init()
 
     static int64_t endMicros = 0 - NEOPIXEL_MINIMUM_INTERVAL_US;
     int64_t startMicros = esp_timer_get_time();
@@ -353,13 +367,16 @@ void NeopixelTransmitControl::startTransmit(uint8_t *buffer, size_t bufferSize) 
 
     This Task only knows the number of preloaded DMA chunks to be sent, nothing about the contents
     Will also take care for enable/disable the I2S channel
+
+    /!\ NOTE: do NOT use logging in this Task, stack is too small for that.
 ***************************************************************************************************
 */
-void NeopixelTransmitControl::transmitTask(void *taskArg) {
-    NeopixelTransmitControl *here = (NeopixelTransmitControl *)taskArg;   // pointer to class instance that started this task
-    here->statsPtr->minimumFreeStack = uxTaskGetStackHighWaterMark(NULL); // init Task stack usage
+void NeopixelTransmitControl::transmitTask(
+    void *initiatorContext) { // pointer to context of the initiator of this Task
 
-    // TASKLOG("Starting i2sTask"); // NOTE: this will NOT work when logging at main task is not active yet
+    NeopixelTransmitControl *here = (NeopixelTransmitControl *)initiatorContext;
+
+    here->statsPtr->minimumFreeStack = uxTaskGetStackHighWaterMark(NULL); // init Task stack usage
 
     //---------------------------------------------------
     //  Lambda function to shutdown this Task

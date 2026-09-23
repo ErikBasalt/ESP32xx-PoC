@@ -67,7 +67,7 @@ bool NeopixelDriver<Mode>::begin(const size_t arg_nrPixels, const gpio_num_t dat
     //---------------------------------------
     //  Init the transmit control class
     //---------------------------------------
-    if (!txControl.init(dataPin, bitRate, arg_nrPixels, txBytesPerPixel, &bufferSize)) {
+    if (!txControl.init(dataPin, bitRate, /*raw data size=*/(arg_nrPixels * txBytesPerPixel), &bufferSize)) {
         ESP_LOGE(TAG, "Failed to initialize TX control task");
         return (false);
     }
@@ -85,7 +85,7 @@ bool NeopixelDriver<Mode>::begin(const size_t arg_nrPixels, const gpio_num_t dat
     memset(buffer, 0, bufferSize); // esp. to ensure the unused bytes in last frame are zeroed
 
     // Only now store the nrPixels
-    // (when it remains 0, it means begin() was not called successfully)
+    // (when it remains 0, it means begin() was not called successfully and setPixel() calls will fail silently)
     nrPixels = arg_nrPixels;
     return (true);
 }
