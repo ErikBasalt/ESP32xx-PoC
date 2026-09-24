@@ -1,7 +1,7 @@
 #pragma once
 /*
 ***************************************************************************************************
-    Header file for ESP32xx Neopixel Driver
+    ESP32xx Neopixel Driver, header file
 
     Copyright (c) 2026 Erik Basalt
     Released under the MIT License, see the LICENSE file for details.
@@ -50,10 +50,14 @@ inline constexpr PixelColor neopixelYellow = {.color = {.b = 0, .g = 0xff, .r = 
     Neopixel communication methods
 
     NOTE: see also explicit template instantiations in .cpp file
+
+    seq3 encoding results in less RAM usage (smaller DMA chunks in I2S driver),
+    while seq4 matches the timing requirements of most modern Neopixels better.
 ===================================================================================================
 */
 enum class PixelType {
     GRB_SEQ3,  // GRB colors, using seq3 encoding (1/3 and 2/3 duty cycle)
+    GRB_SEQ4,  // GRB colors, using seq4 encoding (1/4 and 2/4 duty cycle)
     GRBW_SEQ3, // GRBW colors, using seq3 encoding (1/3 and 2/3 duty cycle)
     GRBW_SEQ4  // GRBW colors, using seq4 encoding (1/4 and 2/4 duty cycle)
 };

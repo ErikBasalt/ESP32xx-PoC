@@ -28,8 +28,8 @@ inline constexpr PixelColor neopixelColored = {.color = {.b = 0x30, .g = 0x20, .
 //-----------------
 //  3x RGB ring
 //-----------------
-NeopixelDriver<PixelType::GRB_SEQ3> npx;
-inline constexpr PixelColor neopixelBackgroundColor = {.color = {.b = 0x10, .g = 0, .r = 0, .w = 0}}; // dimmed Blue
+NeopixelDriver<PixelType::GRB_SEQ4> npx;
+inline constexpr PixelColor neopixelBackgroundColor = {.color = {.b = 0x03, .g = 0, .r = 0, .w = 0}}; // dimmed Blue
 inline constexpr PixelColor neopixelColored = {.color = {.b = 0, .g = 0, .r = 0x10, .w = 0}};         // dimmed Red
 
 // #define PIXEL_COUNT (60 + 24 + 1 + 8 + 12 + 16 + 24 + 32) // 1 ring of 60, 1 ring of 24, 1 assembly of 6 rings

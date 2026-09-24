@@ -23,16 +23,17 @@
 // SOC_I2S_HW_VERSION_1 chip (the original ESP32 and ESP32-S2)
 //-------------------------------------------------------------------
 
-// There is no simple big_endian boolean flag in the I2S configuration struct
-// The hardware architecture inherently expects data to be fed into the FIFO in Little-Endian format
-// The software (here) must handle any necessary byte swapping for big-endian data.
-#define NEOPIXEL_ENABLE_BIG_ENDIAN 0
+// There is no simple Big-Endian setting in the I2S configuration.
+// The hardware architecture inherently expects data to be preloaded/written in Little-Endian format.
+// The software (here) must do the necessary byte swapping for it..
+#define NEOPIXEL_USE_BIG_ENDIAN_DATA 0
 #else
 //-------------------------------------------------------------------
 // SOC_I2S_HW_VERSION_2 chip (ESP32-S3 and later, incl C3 and C6)
 //-------------------------------------------------------------------
-// I2S hardware can handle big-endian mode directly
-#define NEOPIXEL_ENABLE_BIG_ENDIAN 1
+// I2S hardware can handle Big-Endian mode directly, just set the I2S configuration flag accordingly.
+// The software (here) can then simply write the bytes linearly (faster than with byte swapping).
+#define NEOPIXEL_USE_BIG_ENDIAN_DATA 1
 #endif
 /*
 ---------------------------------------------------------------------------------------------------

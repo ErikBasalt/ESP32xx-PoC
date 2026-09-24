@@ -140,8 +140,8 @@ bool NeopixelTransmitControl::init(
         },
     };
 
-#if (NEOPIXEL_ENABLE_BIG_ENDIAN)
-    std_cfg.slot_cfg.big_endian = true; // let the ESP32xx hardware handle big-endian mode
+#if (NEOPIXEL_USE_BIG_ENDIAN_DATA)
+    std_cfg.slot_cfg.big_endian = true; // let the ESP32xx hardware handle big-endian data encoding
     ESP_LOGI(TAG, "Big-endian mode");
 #else
     // Do little-endian byte swapping in software
@@ -197,7 +197,7 @@ bool NeopixelTransmitControl::init(
     if (xTaskCreatePinnedToCore(
             transmitTask, // Task function to run
             "NeopixelTX", // Task name in RTOS
-            1000,         // [bytes] stack size, 23sep26: max usage on ESP32=552 bytes, S3=772 (!), C3=320, C6=296
+            1000,         // [bytes] stack size, 23sep26: max usage on ESP32=566 bytes, S3=772 (!), C3=320, C6=296
             this,         // Task parameter: reference to this Parent class instance
             priority,
             &transmitTaskHandle, // created Task handle
