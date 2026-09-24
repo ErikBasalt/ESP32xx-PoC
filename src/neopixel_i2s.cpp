@@ -165,8 +165,11 @@ bool NeopixelTransmitControl::init(
     ESP_LOGI(TAG, "I2S data TX time=%lld us", (int64_t)(chan_cfg.dma_frame_num * chan_cfg.dma_desc_num) * 1000000 / std_cfg.clk_cfg.sample_rate_hz);
 
     // Let's go
-    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &i2s, nullptr)); // create TX channel only (no RX)
-    ESP_ERROR_CHECK(i2s_channel_init_std_mode(i2s, &std_cfg));  // initialize it
+    if (i2s_new_channel(&chan_cfg, &i2s, nullptr) != ESP_OK) { // create TX channel only (no RX)
+        ESP_LOGE(TAG, "Failed to initialize I2S channel");
+        return (false);
+    }
+    ESP_ERROR_CHECK(i2s_channel_init_std_mode(i2s, &std_cfg));
     ESP_LOGI(TAG, "I2S interrupt priority=%d", chan_cfg.intr_priority);
 
     i2s_event_callbacks_t callbacks = {
