@@ -9,6 +9,8 @@
 #include "dotmatrix.h"
 #include "neopixel_ring.h"
 
+#define ENABLE_DOTMATRIX 1 //@@@TODO: remove, only to test Neopixel ring #2
+
 static const char *TAG = "MAIN";
 
 void setup() {
@@ -19,8 +21,10 @@ void setup() {
 
     // Instantiate the dotmatrix display only AFTER starting the HAL (to have the gpio pin numbers set)
     // Keep it in (heap) memory and set a global pointer to it
+#if (ENABLE_DOTMATRIX)
     static DotMatrix dotMatrix(/*MOSI=*/hal.get_spi_MOSI_pin(), /*SCK=*/hal.get_spi_SCK_pin(), /*CS=*/hal.get_spi_CS_pin());
     dotMatrixPtr = &dotMatrix;
+#endif
 
     startOledLog(); // initialize the OLED display, if present
     startWifi();

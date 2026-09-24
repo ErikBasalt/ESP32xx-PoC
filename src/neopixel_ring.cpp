@@ -7,6 +7,8 @@
 
 #define TAG "RING"
 
+#define NEOPIXEL_ENABLE_SECOND_RING 0 // to enable 2nd ring, also disable the Dotmatrix in main.cpp
+
 #if (1 == 1)
 //-----------------
 //  9x RGBW ring
@@ -41,6 +43,44 @@ void allBlackNeopixelRing(void) {              // for console
     npx.show();
 }
 
+#if (NEOPIXEL_ENABLE_SECOND_RING)
+/*
+===================================================================================================
+    Second NeoPixel ring
+===================================================================================================
+*/
+NeopixelDriver<PixelType::GRB_SEQ3> npx2;
+
+inline constexpr PixelColor neopixelBackgroundColor2 = {.color = {.b = 0x10, .g = 0, .r = 0, .w = 0}}; // dimmed Blue
+inline constexpr PixelColor neopixelColored2 = {.color = {.b = 0, .g = 0, .r = 0x20, .w = 0}};         // fairly bright Red, should be dimmed
+
+// #define PIXEL2_COUNT (60 + 24 + 1 + 8 + 12 + 16 + 24 + 32) // 1 ring of 60, 1 ring of 24, 1 assembly of 6 rings
+#define PIXEL2_COUNT (60 + 24 + 1 + 8 + 12 + 16 + 24 + 32 - 1) // test: 1 pixel less
+// #define PIXEL2_COUNT (60 + 24 + 1 + 8 + 12 + 16 + 24 + 32 + 1) // test: 1 pixel more
+// #define PIXEL2_COUNT 61
+
+bool startNeopixelRing2(void) {
+    gpio_num_t dataPin = hal.get_spi_MOSI_pin();
+
+    if (dataPin == GPIO_NUM_NC) {
+        ESP_LOGE(TAG, "Neopixel data pin is not configured");
+        return (false);
+    }
+
+    ESP_LOGI(TAG, "Initializing second NeoPixel ring on pin=%d with %d pixels", dataPin, PIXEL2_COUNT);
+    npx2.begin(PIXEL2_COUNT, dataPin);
+    //@@@TODO: error handling
+
+#if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE == 0) //@@@TODO: do not enable/disable for every write, will give CONFLICT between ring1 and ring2
+    hal.setNeoPixelEnable(true);              // enable the data output
+#endif
+
+    npx2.setAllPixels(neopixelBlack); // set all pixels to black
+    npx2.show();                      // send the data to the Neopixel ring
+    return (true);
+}
+#endif
+
 bool startNeopixelRing(void) {
     gpio_num_t dataPin = hal.get_neopixel_data_pin();
 
@@ -59,6 +99,9 @@ bool startNeopixelRing(void) {
 
     npx.setAllPixels(neopixelBlack); // set all pixels to black
     npx.show();                      // send the data to the Neopixel ring
+#if (NEOPIXEL_ENABLE_SECOND_RING)
+    startNeopixelRing2();
+#endif
     return (true);
 }
 
@@ -127,8 +170,13 @@ void movingPixel(unsigned long currentMillis) {
 
     npx.setPixel(blackIndex, neopixelBlack);     // erase previously colored pixel
     npx.setPixel(coloredIndex, neopixelColored); // set new colored pixel
-
     npx.show();
+
+#if (NEOPIXEL_ENABLE_SECOND_RING)
+    npx2.setPixel(blackIndex / 2, neopixelBlack);      // erase previously colored pixel
+    npx2.setPixel(coloredIndex / 2, neopixelColored2); // set new colored pixel for the second ring
+    npx2.show();
+#endif
 
     // Update the pixel indexes for the next iteration
     blackIndex = coloredIndex;
@@ -173,6 +221,9 @@ void loopNeopixelRing(unsigned long currentMillis) {
         uint16_t newPotiValue = readPoti();
         if (newPotiValue != potiValue) {
             npx.brightness = ((unsigned)potiValue * 255) / 3300; // scale 0...3300 to 0...64
+#if (NEOPIXEL_ENABLE_SECOND_RING)
+            npx2.brightness = npx.brightness;
+#endif
             // ESP_LOGI("Neopixel", "Poti=%u, brightness=%u", potiValue, npx.brightness);
             potiValue = newPotiValue;
         }
