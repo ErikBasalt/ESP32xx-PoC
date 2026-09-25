@@ -7,6 +7,11 @@
     Released under the MIT License, see the LICENSE file for details.
 ***************************************************************************************************
 */
+#include <esp_idf_version.h>
+#if (ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 5, 5))
+#error "This driver requires ESP-IDF >= 5.5.5"
+#endif
+
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include "neopixel_i2s.h" // use the I2S implementation for Neopixel data transmission
