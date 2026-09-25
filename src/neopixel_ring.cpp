@@ -2,6 +2,7 @@
 #include <driver/gpio.h>
 
 #include "hal.h"
+#include "logger.h" // to set log levels
 #include "neopixel.h"
 #include "neopixel_ring.h"
 
@@ -82,6 +83,10 @@ bool startNeopixelRing2(void) {
 #endif
 
 bool startNeopixelRing(void) {
+    setLogLevel("NPIX", ESP_LOG_DEBUG);
+    setLogLevel("I2S_", ESP_LOG_DEBUG);
+    setLogLevel("RING", ESP_LOG_INFO); // here Info is already quite verbose
+
     gpio_num_t dataPin = hal.get_neopixel_data_pin();
 
     if (dataPin == GPIO_NUM_NC) {
@@ -224,7 +229,7 @@ void loopNeopixelRing(unsigned long currentMillis) {
 #if (NEOPIXEL_ENABLE_SECOND_RING)
             npx2.brightness = npx.brightness;
 #endif
-            // ESP_LOGI("Neopixel", "Poti=%u, brightness=%u", potiValue, npx.brightness);
+            ESP_LOGD("Neopixel", "Poti=%u, brightness=%u", potiValue, npx.brightness);
             potiValue = newPotiValue;
         }
         readPotiTimeoutMillis = currentMillis + 10;

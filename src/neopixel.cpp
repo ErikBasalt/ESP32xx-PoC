@@ -43,7 +43,7 @@ bool NeopixelDriver<Mode>::begin(
         //---------------------------------------
         //  GRB, seq3 timing
         //---------------------------------------
-        ESP_LOGI(TAG, "GRB Neopixels, seq3 timing");
+        ESP_LOGD(TAG, "GRB Neopixels, seq3 timing");
         txBytesPerColor = NEOPIXEL_SEQ3_BYTES_PER_COLOR; // seq3 encoding uses 3 bits per color bit, so 3 bytes per R/G/B color component
         txBytesPerPixel = txBytesPerColor * 3;           // 3 color components (R, G, B), 9 bytes in total
         bitRate = (800000UL * txBytesPerColor);          // Neopixel at 800kHz * 3 bits = 2.4 Mbps (417 ns/bit)
@@ -51,7 +51,7 @@ bool NeopixelDriver<Mode>::begin(
         //---------------------------------------
         //  GRB, seq4 timing
         //---------------------------------------
-        ESP_LOGI(TAG, "GRB Neopixels, seq4 timing");
+        ESP_LOGD(TAG, "GRB Neopixels, seq4 timing");
         txBytesPerColor = NEOPIXEL_SEQ4_BYTES_PER_COLOR; // seq4 encoding uses 4 bits per color bit, so 4 bytes per R/G/B color component
         txBytesPerPixel = txBytesPerColor * 3;           // 3 color components (G, R, B), 12 bytes in total
         bitRate = (800000UL * txBytesPerColor);          // Neopixel at 800kHz * 4 bits = 3.2 Mbps (312.5 ns/bit)
@@ -59,7 +59,7 @@ bool NeopixelDriver<Mode>::begin(
         //---------------------------------------
         //  GRBW, seq3 timing
         //---------------------------------------
-        ESP_LOGI(TAG, "GRBW Neopixels, seq3 timing");
+        ESP_LOGD(TAG, "GRBW Neopixels, seq3 timing");
         txBytesPerColor = NEOPIXEL_SEQ3_BYTES_PER_COLOR; // seq3 encoding uses 3 bits per color bit, so 3 bytes per R/G/B/W color component
         txBytesPerPixel = txBytesPerColor * 4;           // 4 color components (R, G, B, W), 12 bytes in total
         bitRate = (800000UL * txBytesPerColor);          // Neopixel at 800kHz * 3 bits = 2.4 Mbps (417 ns/bit)
@@ -67,7 +67,7 @@ bool NeopixelDriver<Mode>::begin(
         //---------------------------------------
         //  GRBW, seq4 timing
         //---------------------------------------
-        ESP_LOGI(TAG, "GRBW Neopixels, seq4 timing");
+        ESP_LOGD(TAG, "GRBW Neopixels, seq4 timing");
         txBytesPerColor = NEOPIXEL_SEQ4_BYTES_PER_COLOR; // seq4 encoding uses 4 bits per color bit, so 4 bytes per R/G/B color component
         txBytesPerPixel = txBytesPerColor * 4;           // 4 color components (G, R, B, W), 16 bytes in total
         bitRate = (800000UL * txBytesPerColor);          // Neopixel at 800kHz * 4 bits = 3.2 Mbps (312.5 ns/bit)

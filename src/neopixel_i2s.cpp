@@ -103,7 +103,7 @@ static void setDMAconfig(
 bool NeopixelTransmitControl::init(
     gpio_num_t dataPin,              // GPIO pin used for the I2S data output
     uint32_t bitRate,                // [bps] bit rate for the I2S transmission
-    size_t rawDataSize,              // [bytes] size of the raw Neopixel data
+    size_t rawDataSize,              // [bytes] size of the raw Neopixel data, in general: nrPixels * bytesPerPixel
     size_t *requiredBufferSizePtr) { // pointer to store the required buffer size [bytes] for the I2S transmission
 
     if (rawDataSize == 0) {
@@ -120,7 +120,9 @@ bool NeopixelTransmitControl::init(
     // This CANNOT be done in the constructor, when the task is not active yet
     parentTaskHandle = xTaskGetCurrentTaskHandle();
 
-    // Configure I2S
+    //-------------------------------------------------------------------------
+    //  Configure I2S
+    //-------------------------------------------------------------------------
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
 
     i2s_std_config_t std_cfg = {
@@ -141,36 +143,37 @@ bool NeopixelTransmitControl::init(
     };
 
 #if (NEOPIXEL_USE_BIG_ENDIAN_DATA)
-    std_cfg.slot_cfg.big_endian = true; // let the ESP32xx hardware handle big-endian data encoding
-    ESP_LOGI(TAG, "Big-endian mode");
+    std_cfg.slot_cfg.big_endian = true; // let the ESP32xx hardware handle Big-Endian data encoding
+    ESP_LOGD(TAG, "Big-Endian mode");
 #else
     // Do little-endian byte swapping in software
-    ESP_LOGI(TAG, "Little-endian mode (ESP32, ESP32-S2)");
+    ESP_LOGD(TAG, "Little-Endian mode (ESP32, ESP32-S2)");
 #endif
 
     // Define buffer and DMA sizes
-    ESP_LOGI(TAG, "Raw data size=%u bytes, bitRate=%d bps", rawDataSize, bitRate);
+    ESP_LOGD(TAG, "Raw data size=%u bytes, bitRate=%d bps", rawDataSize, bitRate);
 
     size_t bufferSize = rawDataSize;
     setDMAconfig(bufferSize, &chan_cfg); // NOTE: bufferSize called by reference, it can be increased
 
-    ESP_LOGI(TAG, "Optimised buffer size=%d bytes, frames/chunk=%d, bytes/frame=%d, DMA chunks=%d", bufferSize, chan_cfg.dma_frame_num, BYTES_PER_I2S_FRAME, chan_cfg.dma_desc_num);
+    ESP_LOGD(TAG, "Optimised buffer size=%d bytes, frames/chunk=%d, bytes/frame=%d, DMA chunks=%d", bufferSize, chan_cfg.dma_frame_num, BYTES_PER_I2S_FRAME, chan_cfg.dma_desc_num);
     totalNrChunks = chan_cfg.dma_desc_num; // to check in callback if all chunks have been sent
     *requiredBufferSizePtr = bufferSize;   // for caller to allocate buffer
 
     // Calculate speed
     std_cfg.clk_cfg.sample_rate_hz = bitRate / (BYTES_PER_I2S_FRAME * 8); // frames per sec
 
-    ESP_LOGI(TAG, "I2S sample rate=%d frames/sec", std_cfg.clk_cfg.sample_rate_hz);
-    ESP_LOGI(TAG, "I2S data TX time=%lld us", (int64_t)(chan_cfg.dma_frame_num * chan_cfg.dma_desc_num) * 1000000 / std_cfg.clk_cfg.sample_rate_hz);
+    ESP_LOGD(TAG, "Sample rate=%d frames/sec", std_cfg.clk_cfg.sample_rate_hz);
 
-    // Let's go
+    //-------------------------------------------------------------------------
+    //  Let's go
+    //-------------------------------------------------------------------------
     if (i2s_new_channel(&chan_cfg, &i2s, nullptr) != ESP_OK) { // create TX channel only (no RX)
         ESP_LOGE(TAG, "Failed to initialize I2S channel");
         return (false);
     }
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(i2s, &std_cfg));
-    ESP_LOGI(TAG, "I2S interrupt priority=%d", chan_cfg.intr_priority);
+    ESP_LOGD(TAG, "Interrupt priority=%d", chan_cfg.intr_priority);
 
     i2s_event_callbacks_t callbacks = {
         .on_recv = nullptr,
@@ -181,8 +184,11 @@ bool NeopixelTransmitControl::init(
     ESP_ERROR_CHECK(i2s_channel_register_event_callback(i2s, &callbacks, this));
 
     i2s_chan_info_t chan_info;
-    i2s_channel_get_info(i2s, &chan_info);
-    ESP_LOGI(TAG, "I2S channel=%d, total DMA buffer size=%u", chan_info.id, chan_info.total_dma_buf_size);
+    ESP_ERROR_CHECK(i2s_channel_get_info(i2s, &chan_info));
+    ESP_LOGI(TAG, "Started I2S channel=%d, internal DMA buffer size=%u bytes, required transmit time=%lld us",
+             chan_info.id,
+             chan_info.total_dma_buf_size,
+             (int64_t)(chan_cfg.dma_frame_num * chan_cfg.dma_desc_num) * 1000000 / std_cfg.clk_cfg.sample_rate_hz);
 
 #if (ENABLE_I2S_TASK_VERSION)
     UBaseType_t priority = uxTaskPriorityGet(NULL); // Parent task (this) priority
@@ -192,7 +198,7 @@ bool NeopixelTransmitControl::init(
 
     BaseType_t core = xPortGetCoreID(); // run Task on same core as Parent, for fastest Notifications
 
-    ESP_LOGI(TAG, "Starting TX control Task on core=%u, priority=%u", core, priority);
+    ESP_LOGD(TAG, "Starting TX control Task on core=%u, priority=%u", core, priority);
 
     if (xTaskCreatePinnedToCore(
             transmitTask, // Task function to run
@@ -206,7 +212,7 @@ bool NeopixelTransmitControl::init(
         return (false);
     }
 #else
-    ESP_LOGI(TAG, "No task");
+    ESP_LOGD(TAG, "No separate TX control Task");
 #endif
     return (true);
 }
@@ -223,9 +229,9 @@ void NeopixelTransmitControl::deinit(void) {
         // Tell Task to shutdown
         xTaskNotify(transmitTaskHandle, CMD_SHUTDOWN, eSetBits);
         if (waitForNotification(RSP_STOPPED)) {
-            ESP_LOGI(TAG, "Transmit task stopped successfully");
+            ESP_LOGD(TAG, "Transmit control Task stopped successfully");
         } else {
-            ESP_LOGW(TAG, "Transmit task did not respond to shutdown command, killing it");
+            ESP_LOGW(TAG, "Transmit control Task did not respond to shutdown command, killing it");
             tmpHandle = transmitTaskHandle; // check once again
             if (tmpHandle) {
                 vTaskDelete(tmpHandle);
@@ -324,11 +330,11 @@ void NeopixelTransmitControl::startTransmit(
     size_t bytesLoaded = 0;
     if (i2s_channel_preload_data(i2s, buffer, bufferSize, &bytesLoaded) == ESP_OK) {
         if (bytesLoaded != bufferSize) {
-            ESP_LOGE(TAG, "i2s_channel_preload_data() of buffer incomplete: bytesLoaded=%d", bytesLoaded); // Never happened
+            ESP_LOGE(TAG, "Preload of buffer incomplete: bytesLoaded=%d", bytesLoaded); // Never happened
             return;
         }
     } else {
-        ESP_LOGE(TAG, "i2s_channel_preload_data() of buffer failed"); // Never happened
+        ESP_LOGE(TAG, "Preload of buffer failed"); // Never happened
         return;
     }
 
@@ -338,11 +344,11 @@ void NeopixelTransmitControl::startTransmit(
     static const uint8_t dummy_flush[DUMMY_FLUSH_BYTES] = {}; // initialise with all zeros
     if (i2s_channel_preload_data(i2s, dummy_flush, sizeof(dummy_flush), &bytesLoaded) == ESP_OK) {
         if (bytesLoaded != sizeof(dummy_flush)) {
-            ESP_LOGE(TAG, "i2s_channel_preload_data() of dummy flush incomplete: bytesLoaded=%d", bytesLoaded); // Never happened
+            ESP_LOGE(TAG, "Preload of dummy flush incomplete: bytesLoaded=%d", bytesLoaded); // Never happened
             return;
         }
     } else {
-        ESP_LOGE(TAG, "i2s_channel_preload_data() of dummy flush failed"); // Never happened
+        ESP_LOGE(TAG, "Preload of dummy flush failed"); // Never happened
         return;
     }
 
@@ -359,7 +365,7 @@ void NeopixelTransmitControl::startTransmit(
     int64_t deltaMicros = endMicros - startMicros;
     if (deltaMicros > statsPtr->maxSendMicros) {
         statsPtr->maxSendMicros = deltaMicros;
-        ESP_LOGI(TAG, "maxSendMicros=%lld", statsPtr->maxSendMicros); //@@@TODO: remove, show statistics on request
+        ESP_LOGD(TAG, "maxSendMicros=%lld", statsPtr->maxSendMicros); //@@@TODO: remove, show statistics on request
     }
 }
 
