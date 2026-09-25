@@ -116,8 +116,8 @@ bool NeopixelTransmitControl::init(
         return (false);
     }
 
-    // Store the RTOS handle to parent task, for sending Notifications to
-    // This CANNOT be done in the constructor, when the task is not active yet
+    // Store the RTOS handle to parent Task, for sending Notifications to
+    // This CANNOT be done in the constructor, when the Task is not active yet
     parentTaskHandle = xTaskGetCurrentTaskHandle();
 
     //-------------------------------------------------------------------------
@@ -143,11 +143,11 @@ bool NeopixelTransmitControl::init(
     };
 
 #if (NEOPIXEL_USE_BIG_ENDIAN_DATA)
-    std_cfg.slot_cfg.big_endian = true; // let the ESP32xx hardware handle Big-Endian data encoding
-    ESP_LOGD(TAG, "Big-Endian mode");
+    std_cfg.slot_cfg.big_endian = true; // let the ESP32xx hardware handle Big-Endian buffer encoding
+    ESP_LOGD(TAG, "Big-Endian buffer");
 #else
-    // Do little-endian byte swapping in software
-    ESP_LOGD(TAG, "Little-Endian mode (ESP32, ESP32-S2)");
+    // Do Little-Endian byte swapping in software
+    ESP_LOGD(TAG, "Little-Endian buffer (ESP32, ESP32-S2)");
 #endif
 
     // Define buffer and DMA sizes
@@ -168,7 +168,7 @@ bool NeopixelTransmitControl::init(
     //-------------------------------------------------------------------------
     //  Let's go
     //-------------------------------------------------------------------------
-    if (i2s_new_channel(&chan_cfg, &i2s, nullptr) != ESP_OK) { // create TX channel only (no RX)
+    if (unlikely(i2s_new_channel(&chan_cfg, &i2s, nullptr) != ESP_OK)) { // create TX channel only (no RX)
         ESP_LOGE(TAG, "Failed to initialize I2S channel");
         return (false);
     }
@@ -191,28 +191,28 @@ bool NeopixelTransmitControl::init(
              (int64_t)(chan_cfg.dma_frame_num * chan_cfg.dma_desc_num) * 1000000 / std_cfg.clk_cfg.sample_rate_hz);
 
 #if (ENABLE_I2S_TASK_VERSION)
-    UBaseType_t priority = uxTaskPriorityGet(NULL); // Parent task (this) priority
+    UBaseType_t priority = uxTaskPriorityGet(NULL); // parent Task (this) priority
     if (priority < (configMAX_PRIORITIES / 2)) {
         priority++; // Task prio is 1 higher
     } // else: Already at very high prio, have Task at same
 
-    BaseType_t core = xPortGetCoreID(); // run Task on same core as Parent, for fastest Notifications
+    BaseType_t core = xPortGetCoreID(); // run Task on same core as parent, for fastest Notifications
 
-    ESP_LOGD(TAG, "Starting TX control Task on core=%u, priority=%u", core, priority);
+    ESP_LOGD(TAG, "Starting separate Task for Transmit Control on core=%u, priority=%u", core, priority);
 
     if (xTaskCreatePinnedToCore(
             transmitTask, // Task function to run
             "NeopixelTX", // Task name in RTOS
-            1000,         // [bytes] stack size, 23sep26: max usage on ESP32=566 bytes, S3=772 (!), C3=320, C6=296
-            this,         // Task parameter: reference to this Parent class instance
+            1000,         // [bytes] stack size, 25sep26: max usage on ESP32=566 bytes, S3=764 (!), C3=320, C6=312
+            this,         // Task parameter: reference to this parent class instance
             priority,
             &transmitTaskHandle, // created Task handle
             core) != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create task");
+        ESP_LOGE(TAG, "Failed to create Task");
         return (false);
     }
 #else
-    ESP_LOGD(TAG, "No separate TX control Task");
+    ESP_LOGD(TAG, "No separate Task");
 #endif
     return (true);
 }
@@ -223,15 +223,16 @@ bool NeopixelTransmitControl::init(
 ===================================================================================================
 */
 void NeopixelTransmitControl::deinit(void) {
+    ESP_LOGD(TAG, "De-init Transmit Control");
 #if (ENABLE_I2S_TASK_VERSION)
-    TaskHandle_t tmpHandle = transmitTaskHandle; // Use a temporary handle to safely delete the task (and not ourself)
+    TaskHandle_t tmpHandle = transmitTaskHandle; // Use a temporary handle to safely delete the Task (and not ourself)
     if (tmpHandle) {
         // Tell Task to shutdown
-        xTaskNotify(transmitTaskHandle, CMD_SHUTDOWN, eSetBits);
+        xTaskNotify(tmpHandle, CMD_SHUTDOWN, eSetBits);
         if (waitForNotification(RSP_STOPPED)) {
-            ESP_LOGD(TAG, "Transmit control Task stopped successfully");
+            ESP_LOGD(TAG, "-> Task stopped successfully");
         } else {
-            ESP_LOGW(TAG, "Transmit control Task did not respond to shutdown command, killing it");
+            ESP_LOGW(TAG, "-> Task did not respond to shutdown command, killing it");
             tmpHandle = transmitTaskHandle; // check once again
             if (tmpHandle) {
                 vTaskDelete(tmpHandle);
@@ -240,6 +241,7 @@ void NeopixelTransmitControl::deinit(void) {
         }
     }
 #endif
+    ESP_LOGD(TAG, "-> Delete I2S channel");
     i2s_del_channel(i2s);
     i2s = nullptr;
 }
@@ -271,10 +273,9 @@ IRAM_ATTR bool NeopixelTransmitControl::onSentCallback(
     }
 
     if (c->sentNrChunks == c->totalNrChunks) {
-        // All Neopixel DMA chunks (incl dummy flush) have been sent, signal the waiting task it can continue now
+        // All Neopixel DMA chunks (incl dummy flush) have been sent, signal the waiting Task it can continue now
 
         // Notify the Task that initiated the transmission
-        //@@@TODO: check if the task handle != nullptr? might happen in deinit() when transmitting is still ongoing
         xTaskNotifyFromISR(
 #if (ENABLE_I2S_TASK_VERSION)
             c->transmitTaskHandle,
@@ -312,6 +313,7 @@ void NeopixelTransmitControl::startTransmit(
     //-------------------------------------------
     if (!waitForNotification(RSP_READY)) {
         // Timeout waiting for the I2S Task to become ready
+        statsPtr->nrTimeouts++;
         return;
     }
 #else
@@ -328,13 +330,11 @@ void NeopixelTransmitControl::startTransmit(
     //  Preload the data into I2S
     //-------------------------------------------
     size_t bytesLoaded = 0;
-    if (i2s_channel_preload_data(i2s, buffer, bufferSize, &bytesLoaded) == ESP_OK) {
-        if (bytesLoaded != bufferSize) {
-            ESP_LOGE(TAG, "Preload of buffer incomplete: bytesLoaded=%d", bytesLoaded); // Never happened
-            return;
-        }
-    } else {
-        ESP_LOGE(TAG, "Preload of buffer failed"); // Never happened
+    if (
+        (unlikely(i2s_channel_preload_data(i2s, buffer, bufferSize, &bytesLoaded) != ESP_OK)) ||
+        (unlikely(bytesLoaded != bufferSize))) {
+        ESP_LOGE(TAG, "Preload of data buffer failed");
+        statsPtr->nrPreloadDataErrors++;
         return;
     }
 
@@ -342,19 +342,17 @@ void NeopixelTransmitControl::startTransmit(
     // 1 frame of 4 bytes seem to be working already, using some more to be sure
     // If necessary, the I2S driver will pad this DMA chunk with zeros to match the Neopixel chunk sizes
     static const uint8_t dummy_flush[DUMMY_FLUSH_BYTES] = {}; // initialise with all zeros
-    if (i2s_channel_preload_data(i2s, dummy_flush, sizeof(dummy_flush), &bytesLoaded) == ESP_OK) {
-        if (bytesLoaded != sizeof(dummy_flush)) {
-            ESP_LOGE(TAG, "Preload of dummy flush incomplete: bytesLoaded=%d", bytesLoaded); // Never happened
-            return;
-        }
-    } else {
-        ESP_LOGE(TAG, "Preload of dummy flush failed"); // Never happened
+    if (
+        (unlikely(i2s_channel_preload_data(i2s, dummy_flush, sizeof(dummy_flush), &bytesLoaded) != ESP_OK)) ||
+        (unlikely(bytesLoaded != sizeof(dummy_flush)))) {
+        ESP_LOGE(TAG, "Preload of dummy flush failed");
+        statsPtr->nrPreloadDataErrors++;
         return;
     }
 
-    //-------------------------------------------
-    //  Start the actual data transmission
-    //-------------------------------------------
+//-------------------------------------------
+//  Start the actual data transmission
+//-------------------------------------------
 #if (ENABLE_I2S_TASK_VERSION)
     xTaskNotify(transmitTaskHandle, CMD_TRANSMIT, eSetBits);
 #else
@@ -391,21 +389,21 @@ void NeopixelTransmitControl::transmitTask(
     //  Lambda function to shutdown this Task
     //---------------------------------------------------
     auto shutdown = [&](void) {
-        // Do any other cleanup owned by this task here
+        // Do any other cleanup owned by this Task here
 
-        // Tell main task that we are completely finished
+        // Tell main Task that we are completely finished
         xTaskNotify(here->parentTaskHandle,
                     RSP_STOPPED,
                     eSetBits);
 
-        here->transmitTaskHandle = nullptr; // forget this task
-        vTaskDelete(nullptr);               // kill this task
+        here->transmitTaskHandle = nullptr; // forget this Task
+        vTaskDelete(nullptr);               // kill this Task
         // No code should be executed after this
     };
 
     //---------------------------------------------------
-    //  Lambda function to notify parent
-    //  that this task is ready
+    //  Lambda function to notify parent Task
+    //  that this Task here is ready
     //---------------------------------------------------
     auto notifyReady = [&](void) {
         xTaskNotify(here->parentTaskHandle,
@@ -413,26 +411,27 @@ void NeopixelTransmitControl::transmitTask(
                     eSetBits);
     };
 
-    notifyReady(); // initial notification to parent that this task is Ready
+    notifyReady(); // tell parent that this Task is Ready for first command
 
     //---------------------------------------------------
     //  Enter the infinite Task loop
     //---------------------------------------------------
-    for (;;) {
+    bool isTxRunning = false;
+    bool isPendingShutdown = false;
+
+    for (;;) { // infinite Task loop
         uint32_t notification;
-        bool isTxRunning = false;
-        bool isPendingShutdown = false;
 
         xTaskNotifyWait(
             0,             // keep all bits on entry
             UINT32_MAX,    // clear all bits on exit
-            &notification, // the command from parent task
+            &notification, // the command from parent Task
             portMAX_DELAY  // infinite wait
         );
 
         if (notification & CMD_SHUTDOWN) {
             //-------------------------------------------------------
-            //  Shutdown command from parent task
+            //  Shutdown command from parent Task
             //-------------------------------------------------------
             if (isTxRunning) {
                 // Postpone shutdown until transmission is complete
@@ -442,35 +441,16 @@ void NeopixelTransmitControl::transmitTask(
             }
         }
 
-        if (notification & CMD_TRANSMIT) {
-            //-------------------------------------------------------
-            //  Transmit command from parent task
-            //-------------------------------------------------------
-            if (!isTxRunning) {
-                isTxRunning = true;
-#if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE)
-                hal.setNeoPixelEnable(true); // enable the data output
-#endif
-                // Start transmitting the preloaded data
-                here->sentNrChunks = 0;
-
-                i2s_channel_enable(here->i2s);
-
-                // Now wait for EVT_SENT, indicating all the DMA chunks were sent
-
-            } else {
-                // Transmit overrun, caller should have waited for RSP_READY before issuing a new CMD_TRANSMIT
-                // This new transmit command will be ignored
-                here->statsPtr->nrOverruns++;
-            }
-        }
-
         if (notification & EVT_SENT) {
             //-------------------------------------------------------
             //  Event from I2S "on_sent" callback,
-            //  indicating all DMA chunks have been sent
+            //  indicating all DMA chunks were sent for this Task
             //-------------------------------------------------------
-            i2s_channel_disable(here->i2s);
+            isTxRunning = false;
+            if (unlikely(i2s_channel_disable(here->i2s) != ESP_OK)) {
+                here->statsPtr->nrChannelErrors++;
+                // Continue anyway with finalising the transmission
+            }
 #if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE)
             hal.setNeoPixelEnable(false); // disable the data output
 #endif
@@ -481,11 +461,34 @@ void NeopixelTransmitControl::transmitTask(
                 // Shutdown was pending, do it now
                 shutdown();
             } else {
-                // I2S Driver is Ready for new transmit command
-                isTxRunning = false;
-
-                // Notify parent
+                // Tell parent that this Task is Ready for new transmit command
                 notifyReady();
+            }
+        }
+
+        if (notification & CMD_TRANSMIT) {
+            //-------------------------------------------------------
+            //  Transmit command from parent Task
+            //-------------------------------------------------------
+            if ((!isTxRunning) && (!isPendingShutdown)) {
+#if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE)
+                hal.setNeoPixelEnable(true); // enable the data output
+#endif
+                // Start transmitting the preloaded data
+                here->sentNrChunks = 0;
+
+                if (unlikely(i2s_channel_enable(here->i2s) != ESP_OK)) {
+                    here->statsPtr->nrChannelErrors++;
+                    continue; // abort this transmit command, continue waiting for the next command
+                }
+
+                isTxRunning = true;
+                // Now wait for EVT_SENT, indicating all the DMA chunks were sent
+
+            } else {
+                // Transmit overrun, caller should have waited for RSP_READY before issuing a new CMD_TRANSMIT
+                // This new transmit command will be ignored
+                here->statsPtr->nrTimeouts++;
             }
         }
 
@@ -499,7 +502,7 @@ void NeopixelTransmitControl::transmitTask(
 #else
 /*
 ---------------------------------------------------------------------------------------------------
-    Transmit Neopixel data immediately without using a separate RTOS task.
+    Transmit Neopixel data immediately without using a separate RTOS Task.
 ---------------------------------------------------------------------------------------------------
 */
 void NeopixelTransmitControl::transmitNoTask(void) {
@@ -512,17 +515,15 @@ void NeopixelTransmitControl::transmitNoTask(void) {
 #if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE)
     hal.setNeoPixelEnable(true); // enable the data output
 #endif
-    {
-        esp_err_t rv;
-        rv = i2s_channel_enable(i2s);
-        if (rv != ESP_OK) {
-            // Never happens
-            ESP_LOGE(TAG, "i2s_channel_enable() failed: rv=%d", rv);
-        }
+    if (unlikely(i2s_channel_enable(i2s) != ESP_OK)) {
+        ESP_LOGE(TAG, "Cannot enable I2S channel");
+        statsPtr->nrChannelErrors++;
     }
 
     if (!waitForNotification(EVT_SENT)) {
         ESP_LOGE(TAG, "Timeout waiting until all DMA Chunks have been sent");
+        statsPtr->nrTimeouts++;
+
         // Continue anyway, even if timeout occurred
     }
 
@@ -530,13 +531,9 @@ void NeopixelTransmitControl::transmitNoTask(void) {
     //  Disable the channel,
     //  to ensure I2S really stops sending
     //-------------------------------------------
-    {
-        esp_err_t rv;
-        rv = i2s_channel_disable(i2s);
-        if (rv != ESP_OK) {
-            // Never happens
-            ESP_LOGE(TAG, "i2s_channel_disable() failed: rv=%d", rv);
-        }
+    if (unlikely(i2s_channel_disable(i2s) != ESP_OK)) {
+        ESP_LOGE(TAG, "Cannot disable I2S channel");
+        statsPtr->nrChannelErrors++;
     }
 
 #if (NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE)

@@ -14,7 +14,6 @@
 //-----------------
 //  9x RGBW ring
 //-----------------
-// NeopixelDriver<PixelType::SK6812B_RGBW> npx;
 NeopixelDriver<PixelType::GRBW_SEQ4> npx;
 //  NeopixelDriver<static_cast<PixelType>(666)> npx;
 
@@ -38,6 +37,11 @@ inline constexpr PixelColor neopixelColored = {.color = {.b = 0, .g = 0, .r = 0x
 // #define PIXEL_COUNT (60 + 24 + 1 + 8 + 12 + 16 + 24 + 32 + 1) // test: 1 pixel more
 // #define PIXEL_COUNT 61
 #endif
+
+void killNeopixelRing(void) {
+    ESP_LOGI(TAG, "Killing Neopixel ring");
+    npx.~NeopixelDriver();
+}
 
 void allBlackNeopixelRing(void) {              // for console
     npx.setAllPixels(neopixelBackgroundColor); //@@@TODO: change to neopixelBlack
@@ -130,6 +134,26 @@ void statistics(unsigned long currentMillis) {
         ESP_LOGI(TAG, "maxNrChunksSent=%d", reportedMaxChunksSent);
     }
 
+    // Preload data errors
+    static int reportedNrPreloadDataErrors = 0;
+    if (npx.stats.nrPreloadDataErrors > reportedNrPreloadDataErrors) {
+        reportedNrPreloadDataErrors = npx.stats.nrPreloadDataErrors;
+        ESP_LOGI(TAG, "nrPreloadDataErrors=%d", reportedNrPreloadDataErrors);
+    }
+
+    // Channel errors
+    static int reportedNrChannelErrors = 0;
+    if (npx.stats.nrChannelErrors > reportedNrChannelErrors) {
+        reportedNrChannelErrors = npx.stats.nrChannelErrors;
+        ESP_LOGI(TAG, "nrChannelErrors=%d", reportedNrChannelErrors);
+    }
+
+    // Timeouts
+    static int reportedNrTimeouts = 0;
+    if (npx.stats.nrTimeouts > reportedNrTimeouts) {
+        reportedNrTimeouts = npx.stats.nrTimeouts;
+        ESP_LOGI(TAG, "nrTimeouts=%d", reportedNrTimeouts);
+    }
 #if (ENABLE_I2S_TASK_VERSION)
     // Used Task stack
     static UBaseType_t reportedMinFreeTaskStack = UINT_MAX;
@@ -137,6 +161,7 @@ void statistics(unsigned long currentMillis) {
         reportedMinFreeTaskStack = npx.stats.minimumFreeStack;
         ESP_LOGI(TAG, "minimumFreeStack=%u", reportedMinFreeTaskStack);
     }
+
 #endif
 }
 

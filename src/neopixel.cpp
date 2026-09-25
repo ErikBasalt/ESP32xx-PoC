@@ -77,10 +77,10 @@ bool NeopixelDriver<Mode>::begin(
     }
 
     //---------------------------------------
-    //  Init the transmit control class
+    //  Init the Transmit Control
     //---------------------------------------
     if (!txControl.init(dataPin, bitRate, /*raw data size=*/(arg_nrPixels * txBytesPerPixel), &bufferSize)) {
-        ESP_LOGE(TAG, "Failed to initialize TX control task");
+        ESP_LOGE(TAG, "Failed to initialize Transmit Control");
         return (false);
     }
 
@@ -91,7 +91,7 @@ bool NeopixelDriver<Mode>::begin(
     buffer = (uint8_t *)malloc(bufferSize);
     if (buffer == nullptr) {
         ESP_LOGE(TAG, "Failed to allocate buffer of size %d bytes", bufferSize);
-        txControl.deinit(); // cleanup the task
+        txControl.deinit(); // cleanup the Task
         return (false);
     }
     memset(buffer, 0, bufferSize); // esp. to ensure the unused bytes in last frame are zeroed
@@ -208,7 +208,7 @@ void NeopixelDriver<Mode>::setPixel(
         //---------------------------------------
         //  Set one GRB pixel, seq4 timing
         //
-        //  Not sensitive to little/big endian
+        //  Not sensitive to Little/Big-Endian
         //---------------------------------------
         auto set_seq4_color = [](uint8_t colorByte, uint8_t *buffer) { // lambda to set one color byte in seq4 format
             const uint8_t *hi = encode_seq4_nibble[colorByte >> 4];
@@ -227,7 +227,7 @@ void NeopixelDriver<Mode>::setPixel(
         //---------------------------------------
         //  Set one GRBW pixel, seq4 timing
         //
-        //  Not sensitive to little/big endian
+        //  Not sensitive to Little/Big-Endian
         //---------------------------------------
         auto set_seq4_color = [](uint8_t colorByte, uint8_t *buffer) { // lambda to set one color byte in seq4 format
             const uint8_t *hi = encode_seq4_nibble[colorByte >> 4];

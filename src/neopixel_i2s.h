@@ -11,7 +11,7 @@
 #include <driver/i2s_std.h>
 #include <driver/i2s_common.h>
 
-// Enable or disable using a separate RTOS task to wait for I2S transmission completion
+// Use a separate RTOS Task to control the I2S transmission (mainly by enable/disable the I2S channel)
 #define ENABLE_I2S_TASK_VERSION 1
 
 #define NEOPIXEL_ENABLE_OUTPUT_EVERY_WRITE 1
@@ -42,20 +42,25 @@
  */
 struct NeopixelTransmitStatistics {
 #if (ENABLE_I2S_TASK_VERSION)
-    UBaseType_t minimumFreeStack = 0; // minimum free stack [bytes] of this Task
-    uint32_t nrOverruns;              // number of times transmit command is given while Task is not Ready yet
+    // Task
+    UBaseType_t minimumFreeStack; // minimum free stack [bytes] of this Task
 #endif
-    int64_t maxSendMicros;
-    uint32_t maxNrChunksSent;
-    //@@@TODO: add some error counters (e.g., for DMA transfer failures)
+    // Speed
+    int64_t maxSendMicros;    // [us] max time for one transmission
+    uint32_t maxNrChunksSent; // max number of DMA chunks sent for a single transmission, can increase for small amount of Neopixels
+
+    // Errors
+    uint32_t nrTimeouts;          // number of times transmission was not ready in time
+    uint32_t nrPreloadDataErrors; // number of times preloading data failed
+    uint32_t nrChannelErrors;     // number of times a channel error occurred (eg on enable/disable)
 };
 
 class NeopixelTransmitControl {
   private:
     // For the Notifications
-    TaskHandle_t parentTaskHandle = nullptr; // RTOS handle to the parent task, for sending response Notifications to
+    TaskHandle_t parentTaskHandle = nullptr; // RTOS handle to the parent Task, for sending response Notifications to
 #if (ENABLE_I2S_TASK_VERSION)
-    TaskHandle_t transmitTaskHandle = nullptr; // RTOS handle to trasnmit Task, for sending command Notifications to
+    TaskHandle_t transmitTaskHandle = nullptr; // RTOS handle to transmit Task, for sending command Notifications to
 #endif
 
     // I2S channel to use

@@ -11,7 +11,6 @@
 #include <freertos/semphr.h>
 #include "neopixel_i2s.h" // use the I2S implementation for Neopixel data transmission
 
-#ifdef __cplusplus
 /*
 ===================================================================================================
     Union PixelColor
@@ -26,7 +25,7 @@
 typedef union alignas(uint32_t) UnionPixelColor {
     uint32_t value; // set as 0x(ww)rrggbb
 
-    struct StructPixelColor { // set as .b, .g, .r (, .w) bytes, order CANNOT be changed (big/little-endian issue)
+    struct StructPixelColor { // set as .b, .g, .r (, .w) bytes, order CANNOT be changed (Big/Little-Endian issue)
         uint8_t b;
         uint8_t g;
         uint8_t r;
@@ -88,7 +87,7 @@ class NeopixelDriver {
     // Private method to fill a range of pixels with the specified color
     void _fillPixelRange(size_t startIndex, size_t nrPixelsInRange, const PixelColor color) {
         // First use setPixel for two (!) pixels,
-        // to avoid issue with odd number of bytesPerPixel and little-endian byte order
+        // to avoid issue with odd number of bytesPerPixel and Little-Endian byte order
         setPixel(startIndex, color);
         if (nrPixelsInRange > 1) {
             setPixel(startIndex + 1, color);
@@ -121,8 +120,6 @@ class NeopixelDriver {
     // empty, use begin() to initialize the driver
 
     ~NeopixelDriver(void) {
-
-        txControl.deinit();
         if (buffer != nullptr) {
             free(buffer);
             buffer = nullptr;
@@ -160,4 +157,3 @@ class NeopixelDriver {
         _fillPixelRange(startIndex, (endIndex - startIndex + 1), color);
     }
 };
-#endif // __cplusplus
