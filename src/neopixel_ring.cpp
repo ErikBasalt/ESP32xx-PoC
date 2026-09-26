@@ -114,6 +114,14 @@ bool startNeopixelRing(void) {
     return (true);
 }
 
+void logNeopixelStatistics(void) {
+#if (ENABLE_I2S_TASK_VERSION)
+    ESP_LOGI(TAG, "minimumFreeStack=%u", npx.stats.minimumFreeStack);
+#endif
+    ESP_LOGI(TAG, "maxNrChunksSent=%u, maxSendMicros=%lld, ", npx.stats.maxNrChunksSent, npx.stats.maxSendMicros);
+    ESP_LOGI(TAG, "nrTimeouts=%u, nrPreloadDataErrors=%u, nrChannelErrors=%u", npx.stats.nrTimeouts, npx.stats.nrPreloadDataErrors, npx.stats.nrChannelErrors);
+}
+
 void statistics(unsigned long currentMillis) {
     static int loopStartMillis = 0;
     static int maxMillisPerLoop = 0;

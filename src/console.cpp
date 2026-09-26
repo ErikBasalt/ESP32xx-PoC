@@ -107,7 +107,8 @@ void consoleLoop(unsigned long currentMillis) {
             LOG_PRINTF("P = PXD 1 MHz signal output\n");
             LOG_PRINTF("q = toggle Neopixel ring animation\n");
             LOG_PRINTF("Q = erase Neopixel ring\n");
-            LOG_PRINTF("/ = kill Neopixel ring\n");
+            LOG_PRINTF("k = kill Neopixel ring\n");
+            LOG_PRINTF("= = log Neopixel statistics\n");
             LOG_PRINTF("s = system info\n");
             LOG_PRINTF("x = show `Hello!` on dotMatrix\n");
             LOG_PRINTF("X = clear dotMatrix\n");
@@ -185,6 +186,9 @@ void consoleLoop(unsigned long currentMillis) {
             break;
         case '/':
             killNeopixelRing();
+            break;
+        case '=':
+            logNeopixelStatistics();
             break;
         case 'X':
             dotMatrixPtr->showMessage("");
